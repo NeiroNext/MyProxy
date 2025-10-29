@@ -310,47 +310,6 @@ function matchesDomain(pattern, hostLower) {
   return hostLower.endsWith(`.${pattern}`);
 }
 
-function findProfileForRequest(url) {
-  if (!stateCache) {
-    return null;
-  }
-  const { mode, proxyProfiles, domainRules, globalProfileId } = stateCache;
-  const fallbackProfile = proxyProfiles.find((profile) => profile.id === globalProfileId) || proxyProfiles[0] || null;
-  if (mode === 'proxy') {
-    return proxyProfiles.find((profile) => profile.id === globalProfileId) || proxyProfiles[0] || null;
-  }
-  if (mode !== 'auto') {
-    return null;
-  }
-
-  let urlLower = '';
-  let hostLower = '';
-  try {
-    const { hostname } = new URL(url);
-    urlLower = url.toLowerCase();
-    hostLower = hostname.toLowerCase();
-  } catch (error) {
-    urlLower = url.toLowerCase();
-    hostLower = urlLower;
-  }
-
-  const preparedRules = prepareDomainRules(domainRules);
-  for (const rule of preparedRules) {
-    if (!matchesPreparedRule(rule, urlLower, hostLower)) {
-      continue;
-    }
-    if (rule.mode === 'direct') {
-      return null;
-    }
-    const profile = proxyProfiles.find((profileItem) => profileItem.id === rule.profileId) || fallbackProfile;
-    if (profile && profile.host && profile.port) {
-      return profile;
-    }
-  }
-
-  return null;
-}
-
 async function addErrorDomain(url, error) {
   try {
     const { errorDomains = [] } = await chrome.storage.local.get('errorDomains');
@@ -508,23 +467,6 @@ async function handleSetMode(payload) {
   await chrome.storage.local.set(updates);
   return { success: true };
 }
-
-chrome.webRequest.onAuthRequired.addListener(
-  (details) => {
-    const profile = findProfileForRequest(details.url);
-    if (!profile || !profile.username || !profile.password) {
-      return {};
-    }
-    return {
-      authCredentials: {
-        username: profile.username,
-        password: profile.password
-      }
-    };
-  },
-  { urls: ['<all_urls>'] },
-  ['blocking']
-);
 
 ensureDefaults()
   .then(loadStateCache)
