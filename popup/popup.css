@@ -1,0 +1,133 @@
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  width: 220px;
+  margin: 0;
+  background-color: #f9f9f9;
+}
+
+.container {
+  padding: 15px;
+  text-align: center;
+}
+
+.header {
+  margin-bottom: 15px;
+}
+
+h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+  margin: 0;
+}
+
+.mode-selection {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  margin-bottom: 20px;
+}
+
+.mode-selection label {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.mode-selection label:hover {
+  background-color: #f0f0f0;
+}
+
+.mode-selection input[type="radio"] {
+  margin-right: 10px;
+}
+
+.actions {
+  display: flex;
+  justify-content: space-between;
+}
+
+button {
+  width: 48%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 5px;
+  background-color: #007bff;
+  color: white;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+button:hover {
+  background-color: #0056b3;
+}
+
+#settingsBtn {
+  background-color: #6c757d;
+}
+
+#settingsBtn:hover {
+  background-color: #5a6268;
+}
+
+/* Modal Styles */
+.modal-container {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0,0,0,0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.modal-content {
+  background-color: white;
+  padding: 20px;
+  border-radius: 8px;
+  width: 300px;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 10px;
+  margin-bottom: 15px;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.close-btn {
+  font-size: 24px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+#error-list label {
+    display: block;
+    margin-bottom: 5px;
+}
+
+.error-actions {
+    margin-top: 15px;
+    display: flex;
+    justify-content: space-between;
+}
+
+#error-action-select {
+    width: 60%;
+}

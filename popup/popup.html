@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Proxy Manager</title>
+  <link rel="stylesheet" type="text/css" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h2>Proxy Mode</h2>
+    </div>
+    <div class="mode-selection">
+      <label>
+        <input type="radio" name="mode" value="direct" checked>
+        <span>Direct (No Proxy)</span>
+      </label>
+      <label>
+        <input type="radio" name="mode" value="system">
+        <span>System Proxy</span>
+      </label>
+      <label>
+        <input type="radio" name="mode" value="fixed_servers">
+        <span>Proxy</span>
+      </label>
+      <label>
+        <input type="radio" name="mode" value="pac_script">
+        <span>Auto Proxy</span>
+      </label>
+    </div>
+    <div class="actions">
+        <button id="errorsBtn">Errors</button>
+        <button id="settingsBtn">Settings</button>
+    </div>
+  </div>
+
+  <!-- Error Display Modal -->
+  <div id="error-modal" class="modal-container" style="display: none;">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Connection Errors</h3>
+        <span class="close-btn">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div id="error-list"></div>
+        <div class="error-actions">
+            <select id="error-action-select">
+                <option value="proxy">Add to Proxy</option>
+                <option value="direct">Add to Direct</option>
+            </select>
+            <button id="apply-error-action" class="btn-primary">OK</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

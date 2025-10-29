@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Proxy Settings</title>
+  <link rel="stylesheet" type="text/css" href="options.css">
+</head>
+<body>
+
+  <div class="container">
+    <header>
+      <h1>Proxy Settings</h1>
+    </header>
+
+    <!-- Proxy Profiles Section -->
+    <section class="card">
+      <h2>Proxy Profiles</h2>
+      <div id="proxy-profiles-list"></div>
+      <button id="add-profile-btn" class="btn-primary">Add Profile</button>
+    </section>
+
+    <!-- Domain Rules Section -->
+    <section class="card">
+      <h2>Domain Rules</h2>
+      <div id="domain-rules-list"></div>
+      <button id="add-rule-btn" class="btn-primary">Add Rule</button>
+    </section>
+
+    <!-- Import/Export Section -->
+    <section class="card">
+        <h2>Configuration</h2>
+        <div class="io-buttons">
+            <button id="import-btn" class="btn-secondary">Import</button>
+            <button id="export-btn" class="btn-secondary">Export</button>
+            <input type="file" id="import-file-input" style="display: none;" accept=".json">
+        </div>
+    </section>
+
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
