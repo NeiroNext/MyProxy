@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Настройки Smart Proxy</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-header">
+        <h1>Настройки Smart Proxy</h1>
+        <p>Управляйте профилями прокси и определяйте, какие домены и адреса будут использовать прокси.</p>
+      </header>
+      <div id="statusBanner" class="status-banner" hidden></div>
+
+      <section class="card" id="profilesSection">
+        <div class="card-header">
+          <h2>Профили прокси</h2>
+          <button id="addProfile" type="button" class="primary">Добавить профиль</button>
+        </div>
+        <div id="profilesContainer" class="profiles"></div>
+      </section>
+
+      <section class="card" id="domainsSection">
+        <div class="card-header">
+          <h2>Домены и адреса</h2>
+          <button id="addDomain" type="button" class="primary">Добавить запись</button>
+        </div>
+        <div class="table">
+          <div class="table-head">
+            <span>Домен или адрес</span>
+            <span>Режим</span>
+            <span>Профиль</span>
+            <span></span>
+          </div>
+          <div id="domainList" class="table-body"></div>
+        </div>
+      </section>
+
+      <section class="card" id="importExportSection">
+        <h2>Экспорт и импорт</h2>
+        <div class="import-export">
+          <button id="exportData" type="button">Экспортировать настройки</button>
+          <label class="file-input">
+            Импортировать настройки
+            <input type="file" id="importFile" accept="application/json" />
+          </label>
+        </div>
+        <p class="hint">Файл экспорта содержит все профили и правила доменов.</p>
+      </section>
+
+      <section class="card" id="aboutSection">
+        <h2>Подсказки</h2>
+        <ul>
+          <li>Если вместо домена указать полный адрес, прокси будет применяться только к нему.</li>
+          <li>Вы можете назначать разные профили разным доменам и адресам.</li>
+          <li>Первый профиль используется по умолчанию, но вы можете выбрать другой.</li>
+          <li>Поддерживаются маски с поддоменами, например <code>*.example.com</code>.</li>
+        </ul>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

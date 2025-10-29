@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Smart Proxy Switcher",
+  "version": "1.0.0",
+  "description": "Управление несколькими профилями прокси и списками доменов прямо из браузера.",
+  "permissions": [
+    "storage",
+    "proxy",
+    "tabs",
+    "webRequest",
+    "webRequestAuthProvider",
+    "webRequestBlocking"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Smart Proxy Switcher",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html"
+}

@@ -1,0 +1,489 @@
+const DEFAULT_PROFILE_ID = 'profile-1';
+const DEFAULT_PROFILE = {
+  id: DEFAULT_PROFILE_ID,
+  name: 'Основной профиль',
+  scheme: 'http',
+  host: '',
+  port: '',
+  username: '',
+  password: ''
+};
+
+const DEFAULT_STATE = {
+  mode: 'direct',
+  proxyProfiles: [{ ...DEFAULT_PROFILE }],
+  domainRules: [],
+  errorDomains: [],
+  globalProfileId: DEFAULT_PROFILE_ID
+};
+
+let stateCache = null;
+
+function cloneProfile(profile) {
+  return {
+    id: profile.id || crypto.randomUUID(),
+    name: profile.name || '',
+    scheme: (profile.scheme || 'http').toLowerCase(),
+    host: profile.host || '',
+    port: profile.port || '',
+    username: profile.username || '',
+    password: profile.password || ''
+  };
+}
+
+function cloneRule(rule) {
+  const next = {
+    id: rule.id || crypto.randomUUID(),
+    pattern: (rule.pattern || '').trim(),
+    mode: rule.mode === 'direct' ? 'direct' : 'proxy'
+  };
+  if (next.mode === 'proxy' && rule.profileId) {
+    next.profileId = rule.profileId;
+  }
+  return next;
+}
+
+function cloneError(entry) {
+  return {
+    id: entry.id || crypto.randomUUID(),
+    pattern: entry.pattern || '',
+    lastError: entry.lastError || '',
+    timestamp: entry.timestamp || Date.now()
+  };
+}
+
+function normalizeState(raw = {}) {
+  const mode = raw.mode === 'proxy' || raw.mode === 'auto' ? raw.mode : 'direct';
+  const proxyProfiles = Array.isArray(raw.proxyProfiles) && raw.proxyProfiles.length
+    ? raw.proxyProfiles.map(cloneProfile)
+    : [cloneProfile(DEFAULT_PROFILE)];
+  const domainRules = Array.isArray(raw.domainRules)
+    ? raw.domainRules.map(cloneRule)
+    : [];
+  const errorDomains = Array.isArray(raw.errorDomains)
+    ? raw.errorDomains.map(cloneError)
+    : [];
+  let globalProfileId = raw.globalProfileId;
+  if (!globalProfileId || !proxyProfiles.some((profile) => profile.id === globalProfileId)) {
+    globalProfileId = proxyProfiles[0].id;
+  }
+  return {
+    mode,
+    proxyProfiles,
+    domainRules,
+    errorDomains,
+    globalProfileId
+  };
+}
+
+async function loadStateCache() {
+  const data = await chrome.storage.local.get(Object.keys(DEFAULT_STATE));
+  stateCache = normalizeState(data);
+  return stateCache;
+}
+
+function applyChangesToCache(changes) {
+  if (!stateCache) {
+    return loadStateCache();
+  }
+  const merged = { ...stateCache };
+  for (const [key, change] of Object.entries(changes)) {
+    merged[key] = change.newValue;
+  }
+  stateCache = normalizeState(merged);
+  return stateCache;
+}
+
+async function ensureDefaults() {
+  const data = await chrome.storage.local.get(Object.keys(DEFAULT_STATE));
+  const updates = {};
+  for (const [key, value] of Object.entries(DEFAULT_STATE)) {
+    if (data[key] === undefined || (Array.isArray(value) && (!Array.isArray(data[key]) || data[key].length === 0))) {
+      if (Array.isArray(value)) {
+        updates[key] = value.map((item) => (typeof item === 'object' ? { ...item } : item));
+      } else if (typeof value === 'object' && value !== null) {
+        updates[key] = { ...value };
+      } else {
+        updates[key] = value;
+      }
+    }
+  }
+  const profiles = updates.proxyProfiles || data.proxyProfiles;
+  if (!data.globalProfileId || !Array.isArray(profiles) || !profiles.some((profile) => profile.id === data.globalProfileId)) {
+    const firstProfile = Array.isArray(profiles) && profiles.length ? profiles[0] : DEFAULT_PROFILE;
+    updates.globalProfileId = firstProfile.id;
+  }
+  if (Object.keys(updates).length) {
+    await chrome.storage.local.set(updates);
+  }
+}
+
+function parsePort(port) {
+  const parsed = parseInt(port, 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function buildProxyConfig(profile) {
+  if (!profile || !profile.host || !profile.port) {
+    return { mode: 'direct' };
+  }
+  return {
+    mode: 'fixed_servers',
+    rules: {
+      singleProxy: {
+        scheme: profile.scheme || 'http',
+        host: profile.host,
+        port: parsePort(profile.port)
+      },
+      bypassList: []
+    }
+  };
+}
+
+function sanitizeForPac(value) {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function normalizeHostPattern(pattern) {
+  if (!pattern) {
+    return '';
+  }
+  let normalized = pattern;
+  if (normalized.startsWith('*.')) {
+    normalized = normalized.slice(2);
+  }
+  while (normalized.startsWith('.')) {
+    normalized = normalized.slice(1);
+  }
+  return normalized;
+}
+
+function computeRulePriority(rule) {
+  const baseLength = rule.matchPattern.length;
+  return baseLength + (rule.isPathPattern ? 1000 : 0);
+}
+
+function prepareDomainRules(rules) {
+  return rules
+    .map((rule, index) => {
+      const rawPattern = (rule.pattern || '').toLowerCase().trim();
+      if (!rawPattern) {
+        return null;
+      }
+      const isPathPattern = rawPattern.includes('/');
+      const matchPattern = isPathPattern ? rawPattern : normalizeHostPattern(rawPattern);
+      if (!matchPattern) {
+        return null;
+      }
+      const normalizedRule = {
+        id: rule.id,
+        mode: rule.mode === 'direct' ? 'direct' : 'proxy',
+        profileId: rule.profileId,
+        rawPattern,
+        matchPattern,
+        isPathPattern,
+        index
+      };
+      normalizedRule.priority = computeRulePriority(normalizedRule);
+      return normalizedRule;
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (b.priority !== a.priority) {
+        return b.priority - a.priority;
+      }
+      return a.index - b.index;
+    });
+}
+
+function matchesPreparedRule(rule, urlLower, hostLower) {
+  if (rule.isPathPattern) {
+    return urlLower.includes(rule.matchPattern);
+  }
+  return matchesDomain(rule.matchPattern, hostLower);
+}
+
+function buildPacScript(profiles, rules, globalProfileId) {
+  const profileMap = new Map();
+  for (const profile of profiles) {
+    profileMap.set(profile.id, profile);
+  }
+  const firstProfile = profileMap.size ? profileMap.values().next().value : null;
+  const fallbackProfile = (globalProfileId && profileMap.get(globalProfileId)) || firstProfile || DEFAULT_PROFILE;
+  const preparedRules = prepareDomainRules(rules);
+
+  const lines = [];
+  lines.push('function FindProxyForURL(url, host) {');
+  lines.push('  var hostLower = host.toLowerCase();');
+  lines.push('  var urlLower = url.toLowerCase();');
+  lines.push('  function matchesDomain(pattern) {');
+  lines.push('    if (hostLower === pattern) { return true; }');
+  lines.push('    if (hostLower.length <= pattern.length) { return false; }');
+  lines.push('    return hostLower.substr(hostLower.length - pattern.length - 1) === "." + pattern;');
+  lines.push('  }');
+
+  for (const rule of preparedRules) {
+    const pattern = sanitizeForPac(rule.matchPattern);
+    if (rule.isPathPattern) {
+      if (rule.mode === 'direct') {
+        lines.push(`  if (urlLower.indexOf("${pattern}") !== -1) { return "DIRECT"; }`);
+        continue;
+      }
+      const profile = profileMap.get(rule.profileId) || fallbackProfile;
+      if (!profile || !profile.host || !profile.port) {
+        continue;
+      }
+      const scheme = (profile.scheme || 'http').toLowerCase();
+      let proxyPrefix = 'PROXY';
+      if (scheme === 'https') {
+        proxyPrefix = 'HTTPS';
+      } else if (scheme === 'socks5') {
+        proxyPrefix = 'SOCKS5';
+      } else if (scheme === 'socks' || scheme === 'socks4') {
+        proxyPrefix = 'SOCKS';
+      }
+      const proxyLine = `${proxyPrefix} ${profile.host}:${profile.port}`;
+      lines.push(`  if (urlLower.indexOf("${pattern}") !== -1) { return "${proxyLine}"; }`);
+      continue;
+    }
+
+    if (rule.mode === 'direct') {
+      lines.push(`  if (matchesDomain("${pattern}")) { return "DIRECT"; }`);
+      continue;
+    }
+
+    const profile = profileMap.get(rule.profileId) || fallbackProfile;
+    if (!profile || !profile.host || !profile.port) {
+      continue;
+    }
+    const scheme = (profile.scheme || 'http').toLowerCase();
+    let proxyPrefix = 'PROXY';
+    if (scheme === 'https') {
+      proxyPrefix = 'HTTPS';
+    } else if (scheme === 'socks5') {
+      proxyPrefix = 'SOCKS5';
+    } else if (scheme === 'socks' || scheme === 'socks4') {
+      proxyPrefix = 'SOCKS';
+    }
+    const proxyLine = `${proxyPrefix} ${profile.host}:${profile.port}`;
+    lines.push(`  if (matchesDomain("${pattern}")) { return "${proxyLine}"; }`);
+  }
+
+  lines.push('  return "DIRECT";');
+  lines.push('}');
+  return lines.join('\n');
+}
+
+async function updateProxySettings(state = null) {
+  const currentState = state ? normalizeState(state) : stateCache || (await loadStateCache());
+  const { mode, proxyProfiles, domainRules, globalProfileId } = currentState;
+  const profiles = proxyProfiles.length ? proxyProfiles : [cloneProfile(DEFAULT_PROFILE)];
+  const activeProfile = profiles.find((profile) => profile.id === globalProfileId) || profiles[0];
+
+  if (mode === 'proxy') {
+    const config = buildProxyConfig(activeProfile);
+    await chrome.proxy.settings.set({ value: config, scope: 'regular' });
+  } else if (mode === 'auto') {
+    const pacScript = buildPacScript(profiles, domainRules, globalProfileId);
+    await chrome.proxy.settings.set({ value: { mode: 'pac_script', pacScript }, scope: 'regular' });
+  } else {
+    await chrome.proxy.settings.set({ value: { mode: 'direct' }, scope: 'regular' });
+  }
+}
+
+function matchesDomain(pattern, hostLower) {
+  pattern = normalizeHostPattern(pattern);
+  if (hostLower === pattern) {
+    return true;
+  }
+  if (!pattern || !hostLower || hostLower.length <= pattern.length) {
+    return false;
+  }
+  return hostLower.endsWith(`.${pattern}`);
+}
+
+function findProfileForRequest(url) {
+  if (!stateCache) {
+    return null;
+  }
+  const { mode, proxyProfiles, domainRules, globalProfileId } = stateCache;
+  const fallbackProfile = proxyProfiles.find((profile) => profile.id === globalProfileId) || proxyProfiles[0] || null;
+  if (mode === 'proxy') {
+    return proxyProfiles.find((profile) => profile.id === globalProfileId) || proxyProfiles[0] || null;
+  }
+  if (mode !== 'auto') {
+    return null;
+  }
+
+  let urlLower = '';
+  let hostLower = '';
+  try {
+    const { hostname } = new URL(url);
+    urlLower = url.toLowerCase();
+    hostLower = hostname.toLowerCase();
+  } catch (error) {
+    urlLower = url.toLowerCase();
+    hostLower = urlLower;
+  }
+
+  const preparedRules = prepareDomainRules(domainRules);
+  for (const rule of preparedRules) {
+    if (!matchesPreparedRule(rule, urlLower, hostLower)) {
+      continue;
+    }
+    if (rule.mode === 'direct') {
+      return null;
+    }
+    const profile = proxyProfiles.find((profileItem) => profileItem.id === rule.profileId) || fallbackProfile;
+    if (profile && profile.host && profile.port) {
+      return profile;
+    }
+  }
+
+  return null;
+}
+
+async function addErrorDomain(url, error) {
+  try {
+    const { errorDomains = [] } = await chrome.storage.local.get('errorDomains');
+    let hostname = '';
+    try {
+      hostname = new URL(url).hostname;
+    } catch (e) {
+      hostname = url;
+    }
+    if (!hostname) return;
+    const exists = errorDomains.find((item) => item.pattern === hostname);
+    const now = Date.now();
+    const entry = {
+      id: exists ? exists.id : crypto.randomUUID(),
+      pattern: hostname,
+      lastError: error,
+      timestamp: now
+    };
+    let updated;
+    if (exists) {
+      updated = errorDomains.map((item) => (item.pattern === hostname ? entry : item));
+    } else {
+      updated = [...errorDomains, entry];
+    }
+    await chrome.storage.local.set({ errorDomains: updated });
+  } catch (err) {
+    console.warn('Не удалось сохранить домен с ошибкой', err);
+  }
+}
+
+chrome.runtime.onInstalled.addListener(async () => {
+  await ensureDefaults();
+  await loadStateCache();
+  await updateProxySettings(stateCache);
+});
+
+chrome.runtime.onStartup.addListener(async () => {
+  await ensureDefaults();
+  await loadStateCache();
+  await updateProxySettings(stateCache);
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local') return;
+  const requiresUpdate = Boolean(
+    changes.mode || changes.proxyProfiles || changes.domainRules || changes.globalProfileId
+  );
+  const maybeState = applyChangesToCache(changes);
+  const triggerUpdate = (state) => {
+    if (requiresUpdate) {
+      updateProxySettings(state);
+    }
+  };
+  if (maybeState instanceof Promise) {
+    maybeState.then(triggerUpdate).catch((error) => console.warn('Не удалось обновить кэш настроек', error));
+  } else {
+    triggerUpdate(maybeState);
+  }
+});
+
+chrome.webRequest.onErrorOccurred.addListener(
+  (details) => {
+    if (details.tabId !== -1 && details.type === 'main_frame') {
+      addErrorDomain(details.url, details.error);
+    }
+  },
+  { urls: ['<all_urls>'] }
+);
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request?.type === 'clearErrors') {
+    chrome.storage.local.set({ errorDomains: [] }).then(() => sendResponse({ success: true }));
+    return true;
+  }
+  if (request?.type === 'applyErrorDomains') {
+    handleApplyErrorDomains(request.payload).then((result) => sendResponse(result));
+    return true;
+  }
+  return false;
+});
+
+async function handleApplyErrorDomains(payload) {
+  const { domainIds = [], mode = 'proxy', profileId } = payload || {};
+  if (!domainIds.length) {
+    return { success: false, message: 'Не выбраны домены.' };
+  }
+  const store = await chrome.storage.local.get(['domainRules', 'errorDomains', 'proxyProfiles']);
+  const rules = Array.isArray(store.domainRules) ? [...store.domainRules] : [];
+  const errors = Array.isArray(store.errorDomains) ? store.errorDomains : [];
+  const profiles = Array.isArray(store.proxyProfiles) && store.proxyProfiles.length ? store.proxyProfiles : [DEFAULT_PROFILE];
+  const fallbackProfile = profiles.find((profile) => profile.id === profileId) || profiles[0] || DEFAULT_PROFILE;
+
+  const selectedErrors = errors.filter((item) => domainIds.includes(item.id));
+  for (const item of selectedErrors) {
+    const existingIndex = rules.findIndex((rule) => rule.pattern === item.pattern);
+    if (existingIndex >= 0) {
+      const updatedRule = {
+        ...rules[existingIndex],
+        mode
+      };
+      if (mode === 'proxy') {
+        updatedRule.profileId = rules[existingIndex].profileId || fallbackProfile.id;
+      } else {
+        delete updatedRule.profileId;
+      }
+      rules[existingIndex] = updatedRule;
+    } else {
+      const newRule = {
+        id: crypto.randomUUID(),
+        pattern: item.pattern,
+        mode
+      };
+      if (mode === 'proxy') {
+        newRule.profileId = fallbackProfile.id;
+      }
+      rules.push(newRule);
+    }
+  }
+  const remainingErrors = errors.filter((item) => !domainIds.includes(item.id));
+  await chrome.storage.local.set({ domainRules: rules, errorDomains: remainingErrors });
+  return { success: true };
+}
+
+chrome.webRequest.onAuthRequired.addListener(
+  (details) => {
+    const profile = findProfileForRequest(details.url);
+    if (!profile || !profile.username || !profile.password) {
+      return {};
+    }
+    return {
+      authCredentials: {
+        username: profile.username,
+        password: profile.password
+      }
+    };
+  },
+  { urls: ['<all_urls>'] },
+  ['blocking']
+);
+
+ensureDefaults()
+  .then(loadStateCache)
+  .then((state) => updateProxySettings(state))
+  .catch((error) => console.warn('Не удалось инициализировать настройки прокси', error));
