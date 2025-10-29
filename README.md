@@ -1,0 +1,2 @@
+# MyProxy
+Simple proxy plugin
