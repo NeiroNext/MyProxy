@@ -19,6 +19,14 @@ const DEFAULT_STATE = {
 
 let stateCache = null;
 
+async function getStateSnapshot() {
+  if (stateCache) {
+    return stateCache;
+  }
+  const state = await loadStateCache();
+  return state;
+}
+
 function cloneProfile(profile) {
   return {
     id: profile.id || crypto.randomUUID(),
@@ -413,6 +421,24 @@ chrome.webRequest.onErrorOccurred.addListener(
 );
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request?.type === 'getStateSnapshot') {
+    getStateSnapshot()
+      .then((state) => sendResponse({ success: true, state }))
+      .catch((error) => {
+        console.warn('Не удалось получить снимок состояния', error);
+        sendResponse({ success: false, message: 'Не удалось получить данные' });
+      });
+    return true;
+  }
+  if (request?.type === 'setMode') {
+    handleSetMode(request.payload)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        console.warn('Не удалось обновить режим', error);
+        sendResponse({ success: false, message: 'Ошибка при сохранении режима' });
+      });
+    return true;
+  }
   if (request?.type === 'clearErrors') {
     chrome.storage.local.set({ errorDomains: [] }).then(() => sendResponse({ success: true }));
     return true;
@@ -463,6 +489,23 @@ async function handleApplyErrorDomains(payload) {
   }
   const remainingErrors = errors.filter((item) => !domainIds.includes(item.id));
   await chrome.storage.local.set({ domainRules: rules, errorDomains: remainingErrors });
+  return { success: true };
+}
+
+async function handleSetMode(payload) {
+  const { mode, profileId } = payload || {};
+  if (!['direct', 'proxy', 'auto'].includes(mode)) {
+    return { success: false, message: 'Недопустимый режим' };
+  }
+  const nextState = await getStateSnapshot();
+  const updates = { mode };
+  if (mode === 'proxy' && profileId) {
+    const profiles = Array.isArray(nextState.proxyProfiles) ? nextState.proxyProfiles : [];
+    if (profiles.some((profile) => profile.id === profileId)) {
+      updates.globalProfileId = profileId;
+    }
+  }
+  await chrome.storage.local.set(updates);
   return { success: true };
 }
 

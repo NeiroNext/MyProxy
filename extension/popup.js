@@ -11,19 +11,38 @@ const statusMessage = document.getElementById('statusMessage');
 const errorStatus = document.getElementById('errorStatus');
 
 let currentErrors = [];
+let currentProfiles = [];
+let currentGlobalProfileId = '';
+let currentMode = 'direct';
 
 async function loadState() {
-  const { mode = 'direct', errorDomains = [], proxyProfiles = [], globalProfileId } = await chrome.storage.local.get([
-    'mode',
-    'errorDomains',
-    'proxyProfiles',
-    'globalProfileId'
-  ]);
+  let response;
+  try {
+    response = await chrome.runtime.sendMessage({ type: 'getStateSnapshot' });
+  } catch (error) {
+    response = null;
+  }
+  let mode = 'direct';
+  let errorDomains = [];
+  let proxyProfiles = [];
+  let globalProfileId;
+  if (response?.success && response.state) {
+    ({ mode = 'direct', errorDomains = [], proxyProfiles = [], globalProfileId } = response.state);
+  } else {
+    const fallback = await chrome.storage.local.get(['mode', 'errorDomains', 'proxyProfiles', 'globalProfileId']);
+    mode = fallback.mode || 'direct';
+    errorDomains = Array.isArray(fallback.errorDomains) ? fallback.errorDomains : [];
+    proxyProfiles = Array.isArray(fallback.proxyProfiles) ? fallback.proxyProfiles : [];
+    globalProfileId = fallback.globalProfileId;
+  }
+  currentErrors = errorDomains;
+  currentProfiles = proxyProfiles;
+  currentGlobalProfileId = globalProfileId;
+  currentMode = mode;
   const activeRadio = modeRadios.find((radio) => radio.value === mode);
   if (activeRadio) {
     activeRadio.checked = true;
   }
-  currentErrors = errorDomains;
   renderErrors();
   updateStatus(mode, proxyProfiles, globalProfileId);
   populateErrorProfiles(proxyProfiles, globalProfileId);
@@ -121,7 +140,18 @@ function toggleErrorProfileField() {
 modeRadios.forEach((radio) => {
   radio.addEventListener('change', async (event) => {
     if (!event.target.checked) return;
-    await chrome.storage.local.set({ mode: event.target.value });
+    const desiredMode = event.target.value;
+    const result = await chrome.runtime.sendMessage({
+      type: 'setMode',
+      payload: { mode: desiredMode }
+    });
+    if (!result?.success) {
+      errorStatus.textContent = result?.message || 'Не удалось сохранить режим.';
+      return;
+    }
+    currentMode = desiredMode;
+    errorStatus.textContent = '';
+    updateStatus(currentMode, currentProfiles, currentGlobalProfileId);
   });
 });
 
