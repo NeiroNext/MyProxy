@@ -114,10 +114,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const domain = prompt('Enter domain or URL:', '*.example.com');
     if (!domain) return;
     const mode = confirm('Use proxy for this domain?') ? 'proxy' : 'direct';
-    const profileId = parseInt(prompt('Enter profile ID to use:', settings.proxyProfiles[0]?.id || 1), 10);
-    if (isNaN(profileId) || !settings.proxyProfiles.find(p => p.id === profileId)) {
-      alert('Invalid Profile ID.');
-      return;
+
+    let profileId = settings.proxyProfiles[0]?.id || 1;
+    if (mode === 'proxy') {
+        const profilesPrompt = settings.proxyProfiles.map(p => `${p.id}: ${p.name}`).join('\n');
+        const selectedId = parseInt(prompt(`Select a profile by ID:\n${profilesPrompt}`, profileId), 10);
+        if (isNaN(selectedId) || !settings.proxyProfiles.find(p => p.id === selectedId)) {
+            alert('Invalid Profile ID.');
+            return;
+        }
+        profileId = selectedId;
     }
 
     settings.domainRules.push({ id: settings.nextRuleId++, domain, mode, profileId });
@@ -210,12 +216,22 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } else if (target.classList.contains('edit-rule-btn')) {
         const rule = settings.domainRules.find(r => r.id === ruleId);
-        if(rule) {
+        if (rule) {
             const newDomain = prompt('Enter new domain/URL:', rule.domain);
             if (newDomain) rule.domain = newDomain;
 
             const newMode = confirm('Use proxy for this domain?') ? 'proxy' : 'direct';
             rule.mode = newMode;
+
+            if (newMode === 'proxy') {
+                const profilesPrompt = settings.proxyProfiles.map(p => `${p.id}: ${p.name}`).join('\n');
+                const selectedId = parseInt(prompt(`Select a profile by ID:\n${profilesPrompt}`, rule.profileId), 10);
+                if (!isNaN(selectedId) && settings.proxyProfiles.find(p => p.id === selectedId)) {
+                    rule.profileId = selectedId;
+                } else {
+                    alert('Invalid Profile ID. Keeping the original.');
+                }
+            }
 
             saveSettings();
             renderUI();

@@ -43,10 +43,13 @@
       <div class="modal-body">
         <div id="error-list"></div>
         <div class="error-actions">
-            <select id="error-action-select">
-                <option value="proxy">Add to Proxy</option>
-                <option value="direct">Add to Direct</option>
-            </select>
+            <div>
+              <select id="error-action-select">
+                  <option value="proxy">Add to Proxy</option>
+                  <option value="direct">Add to Direct</option>
+              </select>
+              <select id="error-profile-select" style="display: none;"></select>
+            </div>
             <button id="apply-error-action" class="btn-primary">OK</button>
         </div>
       </div>

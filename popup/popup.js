@@ -34,8 +34,29 @@ document.addEventListener('DOMContentLoaded', () => {
   const closeBtn = document.querySelector('.close-btn');
   const errorListDiv = document.getElementById('error-list');
   const applyErrorActionBtn = document.getElementById('apply-error-action');
+  const errorActionSelect = document.getElementById('error-action-select');
+  const errorProfileSelect = document.getElementById('error-profile-select');
+
+  function populateProfileSelect() {
+      chrome.storage.local.get('proxySettings', (data) => {
+          const profiles = data.proxySettings?.proxyProfiles || [];
+          errorProfileSelect.innerHTML = '';
+          profiles.forEach(p => {
+              const option = document.createElement('option');
+              option.value = p.id;
+              option.textContent = p.name;
+              errorProfileSelect.appendChild(option);
+          });
+      });
+  }
+
+  errorActionSelect.addEventListener('change', () => {
+      errorProfileSelect.style.display = errorActionSelect.value === 'proxy' ? 'inline-block' : 'none';
+  });
 
   errorsBtn.addEventListener('click', () => {
+    populateProfileSelect();
+    errorActionSelect.dispatchEvent(new Event('change')); // Trigger change to set initial visibility
     // Load errors from storage and display them
     chrome.storage.local.get({ proxyErrors: [] }, (data) => {
       errorListDiv.innerHTML = '';
@@ -58,12 +79,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   applyErrorActionBtn.addEventListener('click', () => {
     const selectedDomains = Array.from(errorListDiv.querySelectorAll('input:checked')).map(cb => cb.value);
-    const action = document.getElementById('error-action-select').value;
+    const action = errorActionSelect.value;
+    const profileId = parseInt(errorProfileSelect.value, 10);
 
     if (selectedDomains.length > 0) {
       chrome.storage.local.get('proxySettings', (data) => {
         const settings = data.proxySettings;
-        const defaultProfileId = settings.proxyProfiles[0]?.id || 1;
 
         selectedDomains.forEach(domain => {
             // Avoid adding duplicate rules
@@ -72,7 +93,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     id: settings.nextRuleId++,
                     domain: domain,
                     mode: action,
-                    profileId: defaultProfileId
+                    profileId: action === 'proxy' ? profileId : (settings.proxyProfiles[0]?.id || 1)
                 });
             }
         });

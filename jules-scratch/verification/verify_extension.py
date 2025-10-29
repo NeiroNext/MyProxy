@@ -1,5 +1,6 @@
 from playwright.sync_api import sync_playwright
 import time
+import json
 
 def run_verification():
     with sync_playwright() as p:
@@ -38,9 +39,10 @@ def run_verification():
 
         print(f"Found Extension ID: {extension_id}")
 
+        page = context.new_page()
+
         # --- Screenshot the Popup ---
         popup_url = f'chrome-extension://{extension_id}/popup/popup.html'
-        page = context.new_page()
         page.goto(popup_url)
         time.sleep(1)
         page.screenshot(path='jules-scratch/verification/popup.png')
