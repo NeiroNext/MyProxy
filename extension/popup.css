@@ -66,6 +66,30 @@ header h1 {
   transform: translateY(-1px);
 }
 
+.current-site {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #ffffff;
+  border-radius: 10px;
+  padding: 10px;
+  box-shadow: 0 6px 18px rgba(31, 45, 61, 0.08);
+}
+
+.current-site label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #2c3e50;
+}
+
+.current-site select {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(52, 152, 219, 0.3);
+  background: #f8fbff;
+  font-size: 0.9rem;
+}
+
 .errors-panel {
   background: #ffffff;
   border-radius: 12px;

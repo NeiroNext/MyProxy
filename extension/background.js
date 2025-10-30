@@ -293,7 +293,13 @@ async function updateProxySettings(state = null) {
     await chrome.proxy.settings.set({ value: config, scope: 'regular' });
   } else if (mode === 'auto') {
     const pacScript = buildPacScript(profiles, domainRules, globalProfileId);
-    await chrome.proxy.settings.set({ value: { mode: 'pac_script', pacScript }, scope: 'regular' });
+    await chrome.proxy.settings.set({
+      value: {
+        mode: 'pac_script',
+        pacScript: { data: pacScript }
+      },
+      scope: 'regular'
+    });
   } else {
     await chrome.proxy.settings.set({ value: { mode: 'direct' }, scope: 'regular' });
   }
@@ -308,6 +314,34 @@ function matchesDomain(pattern, hostLower) {
     return false;
   }
   return hostLower.endsWith(`.${pattern}`);
+}
+
+function normalizeRulePatternValue(pattern) {
+  return typeof pattern === 'string' ? pattern.trim().toLowerCase() : '';
+}
+
+function extractHostname(url = '') {
+  if (!url || typeof url !== 'string') {
+    return '';
+  }
+  try {
+    const parsed = new URL(url);
+    const blockedProtocols = new Set([
+      'chrome:',
+      'edge:',
+      'about:',
+      'devtools:',
+      'file:',
+      'chrome-extension:',
+      'moz-extension:'
+    ]);
+    if (blockedProtocols.has(parsed.protocol)) {
+      return '';
+    }
+    return (parsed.hostname || '').toLowerCase();
+  } catch (error) {
+    return '';
+  }
 }
 
 async function addErrorDomain(url, error) {
@@ -406,6 +440,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     handleApplyErrorDomains(request.payload).then((result) => sendResponse(result));
     return true;
   }
+  if (request?.type === 'resolveUrlRule') {
+    handleResolveUrlRule(request.payload)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        console.warn('Не удалось определить правило для адреса', error);
+        sendResponse({ success: false, message: 'Ошибка определения правила' });
+      });
+    return true;
+  }
+  if (request?.type === 'setDomainRule') {
+    handleSetDomainRule(request.payload)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        console.warn('Не удалось обновить правило домена', error);
+        sendResponse({ success: false, message: 'Не удалось сохранить правило' });
+      });
+    return true;
+  }
   return false;
 });
 
@@ -465,6 +517,115 @@ async function handleSetMode(payload) {
     }
   }
   await chrome.storage.local.set(updates);
+  return { success: true };
+}
+
+async function handleResolveUrlRule(payload = {}) {
+  const inputUrl = typeof payload.url === 'string' ? payload.url : '';
+  const inputPattern = normalizeRulePatternValue(payload.pattern);
+  const hostname = extractHostname(inputUrl) || inputPattern;
+  if (!hostname) {
+    return { success: false, message: 'Не удалось определить домен.' };
+  }
+
+  const state = await getStateSnapshot();
+  const preparedRules = prepareDomainRules(state.domainRules);
+  const hostLower = hostname.toLowerCase();
+  const urlLower = inputUrl ? inputUrl.toLowerCase() : '';
+  const matchedRule = preparedRules.find((rule) => matchesPreparedRule(rule, urlLower, hostLower));
+  const explicitRule = state.domainRules.find(
+    (rule) => normalizeRulePatternValue(rule.pattern) === hostLower
+  );
+
+  let mode = matchedRule?.mode || 'direct';
+  let profileId = matchedRule?.mode === 'proxy' ? matchedRule.profileId : null;
+
+  if (explicitRule) {
+    mode = explicitRule.mode === 'proxy' ? 'proxy' : 'direct';
+    profileId = explicitRule.mode === 'proxy' ? explicitRule.profileId : null;
+  }
+
+  const profiles = Array.isArray(state.proxyProfiles) ? state.proxyProfiles : [];
+  if (mode === 'proxy') {
+    if (!profiles.some((profile) => profile.id === profileId)) {
+      const fallback =
+        (state.globalProfileId && profiles.find((profile) => profile.id === state.globalProfileId)) ||
+        profiles[0];
+      profileId = fallback ? fallback.id : null;
+    }
+  }
+
+  return {
+    success: true,
+    hostname,
+    mode,
+    profileId,
+    explicit: Boolean(explicitRule)
+  };
+}
+
+async function handleSetDomainRule(payload = {}) {
+  const inputUrl = typeof payload.url === 'string' ? payload.url : '';
+  const patternInput = normalizeRulePatternValue(payload.pattern) || extractHostname(inputUrl);
+  if (!patternInput) {
+    return { success: false, message: 'Не удалось определить домен.' };
+  }
+
+  const desiredMode = payload.mode === 'proxy' ? 'proxy' : 'direct';
+  const state = await getStateSnapshot();
+  const existingRules = Array.isArray(state.domainRules) ? state.domainRules : [];
+  const profiles = Array.isArray(state.proxyProfiles) ? state.proxyProfiles : [];
+  const normalizedPattern = normalizeRulePatternValue(patternInput);
+  const existingRule = existingRules.find(
+    (rule) => normalizeRulePatternValue(rule.pattern) === normalizedPattern
+  );
+
+  let targetProfileId = null;
+  if (desiredMode === 'proxy') {
+    const requestedProfile = payload.profileId;
+    const profileMatch = profiles.find((profile) => profile.id === requestedProfile);
+    if (profileMatch) {
+      targetProfileId = profileMatch.id;
+    } else if (state.globalProfileId) {
+      const fallbackProfile = profiles.find((profile) => profile.id === state.globalProfileId);
+      if (fallbackProfile) {
+        targetProfileId = fallbackProfile.id;
+      }
+    }
+    if (!targetProfileId && profiles.length) {
+      targetProfileId = profiles[0].id;
+    }
+    if (!targetProfileId) {
+      return { success: false, message: 'Нет доступного профиля прокси.' };
+    }
+  }
+
+  let updatedRule;
+  if (existingRule) {
+    updatedRule = {
+      ...existingRule,
+      pattern: normalizedPattern,
+      mode: desiredMode
+    };
+  } else {
+    updatedRule = {
+      id: crypto.randomUUID(),
+      pattern: normalizedPattern,
+      mode: desiredMode
+    };
+  }
+
+  if (desiredMode === 'proxy') {
+    updatedRule.profileId = targetProfileId;
+  } else {
+    delete updatedRule.profileId;
+  }
+
+  const nextRules = existingRule
+    ? existingRules.map((rule) => (rule.id === existingRule.id ? updatedRule : rule))
+    : [...existingRules, updatedRule];
+
+  await chrome.storage.local.set({ domainRules: nextRules });
   return { success: true };
 }
 
