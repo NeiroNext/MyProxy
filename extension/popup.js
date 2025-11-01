@@ -9,6 +9,7 @@ const errorProfile = document.getElementById('errorProfile');
 const applyErrors = document.getElementById('applyErrors');
 const statusMessage = document.getElementById('statusMessage');
 const errorStatus = document.getElementById('errorStatus');
+const errorsBadge = document.getElementById('errorsBadge');
 const currentSiteSection = document.getElementById('currentSiteSection');
 const currentSiteLabel = document.getElementById('currentSiteLabel');
 const currentSiteSelect = document.getElementById('currentSiteSelect');
@@ -18,6 +19,7 @@ let currentErrors = [];
 let currentProfiles = [];
 let currentGlobalProfileId = '';
 let currentMode = 'direct';
+let currentAutoFallback = 'direct';
 let currentSiteDetails = null;
 let isUpdatingSiteSelect = false;
 
@@ -32,31 +34,47 @@ async function loadState() {
   let errorDomains = [];
   let proxyProfiles = [];
   let globalProfileId;
+  let autoModeFallback = 'direct';
   if (response?.success && response.state) {
-    ({ mode = 'direct', errorDomains = [], proxyProfiles = [], globalProfileId } = response.state);
+    ({
+      mode = 'direct',
+      errorDomains = [],
+      proxyProfiles = [],
+      globalProfileId,
+      autoModeFallback = 'direct'
+    } = response.state);
   } else {
-    const fallback = await chrome.storage.local.get(['mode', 'errorDomains', 'proxyProfiles', 'globalProfileId']);
+    const fallback = await chrome.storage.local.get([
+      'mode',
+      'errorDomains',
+      'proxyProfiles',
+      'globalProfileId',
+      'autoModeFallback'
+    ]);
     mode = fallback.mode || 'direct';
     errorDomains = Array.isArray(fallback.errorDomains) ? fallback.errorDomains : [];
     proxyProfiles = Array.isArray(fallback.proxyProfiles) ? fallback.proxyProfiles : [];
     globalProfileId = fallback.globalProfileId;
+    autoModeFallback = fallback.autoModeFallback === 'proxy' ? 'proxy' : 'direct';
   }
   currentErrors = errorDomains;
   currentProfiles = proxyProfiles;
   currentGlobalProfileId = globalProfileId;
   currentMode = mode;
+  currentAutoFallback = autoModeFallback === 'proxy' ? 'proxy' : 'direct';
   const activeRadio = modeRadios.find((radio) => radio.value === mode);
   if (activeRadio) {
     activeRadio.checked = true;
   }
   renderErrors();
-  updateStatus(mode, proxyProfiles, globalProfileId);
+  updateStatus(mode, proxyProfiles, globalProfileId, currentAutoFallback);
   populateErrorProfiles(proxyProfiles, globalProfileId);
   toggleErrorProfileField();
+  updateErrorsBadge();
   await refreshCurrentSiteSelector();
 }
 
-function updateStatus(mode, profiles, globalProfileId) {
+function updateStatus(mode, profiles, globalProfileId, autoFallback) {
   let text = '';
   if (mode === 'direct') {
     text = 'Режим: без прокси';
@@ -64,7 +82,13 @@ function updateStatus(mode, profiles, globalProfileId) {
     const profile = profiles?.find((item) => item.id === globalProfileId) || profiles?.[0];
     text = `Режим: все через прокси${profile?.name ? ` (${profile.name})` : ''}`;
   } else {
-    text = 'Режим: автопрокси';
+    const profile = profiles?.find((item) => item.id === globalProfileId) || profiles?.[0];
+    if (autoFallback === 'proxy' && profile) {
+      const profileName = profile.name || profile.host || 'Профиль';
+      text = `Режим: автопрокси (по умолчанию через ${profileName})`;
+    } else {
+      text = 'Режим: автопрокси (по умолчанию без прокси)';
+    }
   }
   statusMessage.textContent = text;
 }
@@ -72,6 +96,7 @@ function updateStatus(mode, profiles, globalProfileId) {
 function renderErrors() {
   errorList.innerHTML = '';
   errorStatus.textContent = '';
+  updateErrorsBadge();
   if (!currentErrors.length) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
@@ -96,7 +121,7 @@ function renderErrors() {
       label.appendChild(checkbox);
 
       const text = document.createElement('span');
-      text.textContent = item.pattern;
+      text.textContent = formatErrorPattern(item.pattern);
       label.appendChild(text);
 
       container.appendChild(label);
@@ -107,6 +132,46 @@ function renderErrors() {
 
       errorList.appendChild(container);
     });
+}
+
+function updateErrorsBadge() {
+  if (!errorsBadge) {
+    return;
+  }
+  const count = Array.isArray(currentErrors) ? currentErrors.length : 0;
+  if (count > 0) {
+    errorsBadge.textContent = String(count);
+    errorsBadge.classList.remove('hidden');
+  } else {
+    errorsBadge.classList.add('hidden');
+    errorsBadge.textContent = '0';
+  }
+}
+
+function formatErrorPattern(pattern) {
+  if (!pattern || typeof pattern !== 'string') {
+    return '';
+  }
+  let candidate = pattern.trim();
+  if (!candidate) {
+    return '';
+  }
+  let hostname = '';
+  try {
+    if (candidate.includes('://')) {
+      hostname = new URL(candidate).hostname;
+    } else {
+      hostname = new URL(`http://${candidate}`).hostname;
+    }
+  } catch (error) {
+    hostname = candidate;
+  }
+  hostname = hostname.replace(/^\*\./, '').replace(/^\.+/, '');
+  if (hostname.includes('/')) {
+    hostname = hostname.split('/')[0];
+  }
+  const finalValue = hostname || candidate;
+  return finalValue.toLowerCase();
 }
 
 function populateErrorProfiles(profiles, globalProfileId) {
@@ -204,7 +269,7 @@ async function refreshCurrentSiteSelector() {
   }
 
   currentSiteSection.classList.remove('hidden');
-  currentSiteDetails = { hostname, url };
+  currentSiteDetails = { hostname, url, tabId: tab?.id };
   if (currentSiteLabel) {
     currentSiteLabel.textContent = `Текущий сайт: ${hostname}`;
   }
@@ -304,6 +369,14 @@ async function applyCurrentSiteSelection(value) {
     if (currentSiteStatus) {
       currentSiteStatus.textContent = 'Правило обновлено.';
     }
+    const shouldReload = window.confirm('Перезагрузить страницу, чтобы применить новое правило?');
+    if (shouldReload && typeof currentSiteDetails.tabId === 'number') {
+      try {
+        await chrome.tabs.reload(currentSiteDetails.tabId);
+      } catch (error) {
+        // ignore inability to reload
+      }
+    }
     await refreshCurrentSiteSelector();
   } else {
     if (currentSiteStatus) {
@@ -327,7 +400,7 @@ modeRadios.forEach((radio) => {
     }
     currentMode = desiredMode;
     errorStatus.textContent = '';
-    updateStatus(currentMode, currentProfiles, currentGlobalProfileId);
+    updateStatus(currentMode, currentProfiles, currentGlobalProfileId, currentAutoFallback);
   });
 });
 
@@ -383,7 +456,13 @@ if (currentSiteSelect) {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
-  if (changes.mode || changes.errorDomains || changes.proxyProfiles || changes.globalProfileId) {
+  if (
+    changes.mode ||
+    changes.errorDomains ||
+    changes.proxyProfiles ||
+    changes.globalProfileId ||
+    changes.autoModeFallback
+  ) {
     loadState();
   }
 });

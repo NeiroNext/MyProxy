@@ -2,6 +2,17 @@ const addProfileBtn = document.getElementById('addProfile');
 const profilesContainer = document.getElementById('profilesContainer');
 const addDomainBtn = document.getElementById('addDomain');
 const domainList = document.getElementById('domainList');
+const domainTable = document.getElementById('domainTable');
+const autoFallbackSelect = document.getElementById('autoFallback');
+const toggleBulkBtn = document.getElementById('toggleBulkSelection');
+const bulkActions = document.getElementById('bulkActions');
+const bulkModeSelect = document.getElementById('bulkModeSelect');
+const bulkProfileSelect = document.getElementById('bulkProfileSelect');
+const bulkProfileWrapper = document.getElementById('bulkProfileWrapper');
+const bulkApplyBtn = document.getElementById('bulkApply');
+const bulkDeleteBtn = document.getElementById('bulkDelete');
+const bulkSelectedCount = document.getElementById('bulkSelectedCount');
+const bulkClearBtn = document.getElementById('bulkClear');
 const exportBtn = document.getElementById('exportData');
 const importInput = document.getElementById('importFile');
 const statusBanner = document.getElementById('statusBanner');
@@ -10,8 +21,12 @@ let statusTimer;
 let state = {
   proxyProfiles: [],
   domainRules: [],
-  globalProfileId: 'profile-1'
+  globalProfileId: 'profile-1',
+  autoModeFallback: 'direct'
 };
+
+let isBulkMode = false;
+const selectedDomainIds = new Set();
 
 function showStatus(message, type = 'success') {
   if (!statusBanner) return;
@@ -27,16 +42,25 @@ function showStatus(message, type = 'success') {
 }
 
 async function loadState() {
-  const data = await chrome.storage.local.get(['proxyProfiles', 'domainRules', 'globalProfileId']);
+  const data = await chrome.storage.local.get([
+    'proxyProfiles',
+    'domainRules',
+    'globalProfileId',
+    'autoModeFallback'
+  ]);
   state.proxyProfiles = Array.isArray(data.proxyProfiles) && data.proxyProfiles.length ? data.proxyProfiles : [createDefaultProfile()];
   state.domainRules = Array.isArray(data.domainRules) ? data.domainRules : [];
   state.globalProfileId = data.globalProfileId || state.proxyProfiles[0].id;
+  state.autoModeFallback = data.autoModeFallback === 'proxy' ? 'proxy' : 'direct';
   ensureValidState();
   renderProfiles();
   renderDomains();
+  updateAutoFallbackControl();
+  updateBulkUI();
 }
 
 function ensureValidState() {
+  state.autoModeFallback = state.autoModeFallback === 'proxy' ? 'proxy' : 'direct';
   if (!state.proxyProfiles.length) {
     state.proxyProfiles = [createDefaultProfile()];
   }
@@ -194,15 +218,160 @@ function renderProfiles() {
   state.proxyProfiles.forEach((profile, index) => {
     profilesContainer.appendChild(createProfileCard(profile, index));
   });
+  populateBulkProfiles();
+}
+
+function updateAutoFallbackControl() {
+  if (!autoFallbackSelect) {
+    return;
+  }
+  autoFallbackSelect.value = state.autoModeFallback;
+}
+
+function populateBulkProfiles() {
+  if (!bulkProfileSelect) {
+    return;
+  }
+  const previousValue = bulkProfileSelect.value;
+  bulkProfileSelect.innerHTML = '';
+  if (!state.proxyProfiles.length) {
+    bulkProfileSelect.disabled = true;
+    updateBulkModeVisibility();
+    return;
+  }
+  state.proxyProfiles.forEach((profile) => {
+    const option = document.createElement('option');
+    option.value = profile.id;
+    option.textContent = profile.name || profile.host || 'Безымянный профиль';
+    bulkProfileSelect.appendChild(option);
+  });
+  const fallbackId = state.proxyProfiles.some((profile) => profile.id === previousValue)
+    ? previousValue
+    : state.globalProfileId;
+  bulkProfileSelect.value = fallbackId || state.proxyProfiles[0].id;
+  bulkProfileSelect.disabled = false;
+  updateBulkModeVisibility();
+}
+
+function updateBulkModeVisibility() {
+  if (!bulkProfileWrapper) {
+    return;
+  }
+  const isProxyMode = bulkModeSelect?.value === 'proxy';
+  bulkProfileWrapper.style.display = isProxyMode ? '' : 'none';
+  if (bulkProfileSelect) {
+    bulkProfileSelect.disabled = !isProxyMode || !bulkProfileSelect.options.length;
+  }
+}
+
+function updateBulkUI() {
+  const hasSelection = selectedDomainIds.size > 0;
+  if (bulkActions) {
+    bulkActions.hidden = !isBulkMode;
+  }
+  if (domainTable) {
+    domainTable.classList.toggle('bulk-enabled', isBulkMode);
+  }
+  if (toggleBulkBtn) {
+    toggleBulkBtn.textContent = isBulkMode ? 'Готово' : 'Выбрать несколько';
+  }
+  if (bulkSelectedCount) {
+    bulkSelectedCount.textContent = `Выделено: ${selectedDomainIds.size}`;
+  }
+  if (bulkApplyBtn) {
+    const needsProfile = bulkModeSelect?.value === 'proxy';
+    const profileReady = !needsProfile || (bulkProfileSelect && bulkProfileSelect.value);
+    bulkApplyBtn.disabled = !isBulkMode || !hasSelection || !profileReady;
+  }
+  if (bulkDeleteBtn) {
+    bulkDeleteBtn.disabled = !isBulkMode || !hasSelection;
+  }
+  if (bulkClearBtn) {
+    bulkClearBtn.disabled = !isBulkMode || !hasSelection;
+  }
+  updateBulkModeVisibility();
+}
+
+function toggleBulkMode(force) {
+  const shouldEnable = typeof force === 'boolean' ? force : !isBulkMode;
+  isBulkMode = shouldEnable;
+  if (!isBulkMode) {
+    selectedDomainIds.clear();
+  }
+  updateBulkUI();
+  renderDomains();
+}
+
+async function handleBulkApply() {
+  if (!isBulkMode || !selectedDomainIds.size) {
+    showStatus('Выберите записи для изменения.', 'error');
+    return;
+  }
+  const mode = bulkModeSelect?.value === 'proxy' ? 'proxy' : 'direct';
+  let targetProfileId = null;
+  if (mode === 'proxy') {
+    targetProfileId = bulkProfileSelect?.value;
+    if (!targetProfileId) {
+      showStatus('Выберите профиль прокси.', 'error');
+      return;
+    }
+  }
+  state.domainRules = state.domainRules.map((rule) => {
+    if (!selectedDomainIds.has(rule.id)) {
+      return rule;
+    }
+    const updated = { ...rule, mode };
+    if (mode === 'proxy') {
+      updated.profileId = targetProfileId;
+    } else {
+      delete updated.profileId;
+    }
+    return updated;
+  });
+  await saveDomains();
+  renderDomains();
+  updateBulkUI();
+  showStatus('Изменения применены к выбранным доменам.');
+}
+
+async function handleBulkDelete() {
+  if (!isBulkMode || !selectedDomainIds.size) {
+    showStatus('Выберите записи для удаления.', 'error');
+    return;
+  }
+  state.domainRules = state.domainRules.filter((rule) => !selectedDomainIds.has(rule.id));
+  selectedDomainIds.clear();
+  await saveDomains();
+  renderDomains();
+  updateBulkUI();
+  showStatus('Выбранные домены удалены.');
+}
+
+function clearBulkSelection() {
+  if (!isBulkMode) {
+    return;
+  }
+  selectedDomainIds.clear();
+  updateBulkUI();
+  renderDomains();
 }
 
 function renderDomains() {
   domainList.innerHTML = '';
+  if (selectedDomainIds.size) {
+    const validIds = new Set(state.domainRules.map((rule) => rule.id));
+    for (const id of Array.from(selectedDomainIds)) {
+      if (!validIds.has(id)) {
+        selectedDomainIds.delete(id);
+      }
+    }
+  }
   if (!state.domainRules.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
     empty.textContent = 'Список доменов пока пуст.';
     domainList.appendChild(empty);
+    updateBulkUI();
     return;
   }
 
@@ -212,6 +381,24 @@ function renderDomains() {
     .forEach((rule) => {
       const row = document.createElement('div');
       row.className = 'table-row';
+
+      if (isBulkMode) {
+        const selectCell = document.createElement('div');
+        selectCell.className = 'select-cell';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = selectedDomainIds.has(rule.id);
+        checkbox.addEventListener('change', (event) => {
+          if (event.target.checked) {
+            selectedDomainIds.add(rule.id);
+          } else {
+            selectedDomainIds.delete(rule.id);
+          }
+          updateBulkUI();
+        });
+        selectCell.appendChild(checkbox);
+        row.appendChild(selectCell);
+      }
 
       const patternInput = document.createElement('input');
       patternInput.type = 'text';
@@ -276,6 +463,7 @@ function renderDomains() {
 
       domainList.appendChild(row);
     });
+  updateBulkUI();
 }
 
 function addProfile() {
@@ -337,11 +525,25 @@ async function saveDomains() {
   await chrome.storage.local.set({ domainRules: state.domainRules });
 }
 
+async function handleAutoFallbackChange(event) {
+  const nextValue = event.target.value === 'proxy' ? 'proxy' : 'direct';
+  state.autoModeFallback = nextValue;
+  ensureValidState();
+  await chrome.storage.local.set({ autoModeFallback: state.autoModeFallback });
+  updateBulkUI();
+  const message =
+    nextValue === 'proxy'
+      ? 'Автопрокси теперь использует прокси по умолчанию.'
+      : 'Автопрокси теперь пропускает новые сайты без прокси.';
+  showStatus(message);
+}
+
 function exportData() {
   const data = {
     proxyProfiles: state.proxyProfiles,
     domainRules: state.domainRules,
-    globalProfileId: state.globalProfileId
+    globalProfileId: state.globalProfileId,
+    autoModeFallback: state.autoModeFallback
   };
   const json = JSON.stringify(data, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
@@ -369,14 +571,18 @@ function handleImport(event) {
       state.proxyProfiles = parsed.proxyProfiles;
       state.domainRules = parsed.domainRules;
       state.globalProfileId = parsed.globalProfileId || (state.proxyProfiles[0] && state.proxyProfiles[0].id) || crypto.randomUUID();
+      state.autoModeFallback = parsed.autoModeFallback === 'proxy' ? 'proxy' : 'direct';
       ensureValidState();
       await chrome.storage.local.set({
         proxyProfiles: state.proxyProfiles,
         domainRules: state.domainRules,
-        globalProfileId: state.globalProfileId
+        globalProfileId: state.globalProfileId,
+        autoModeFallback: state.autoModeFallback
       });
       renderProfiles();
       renderDomains();
+      updateAutoFallbackControl();
+      updateBulkUI();
       showStatus('Настройки успешно импортированы.');
     } catch (error) {
       console.error(error);
@@ -392,10 +598,31 @@ addProfileBtn.addEventListener('click', addProfile);
 addDomainBtn.addEventListener('click', addDomain);
 exportBtn.addEventListener('click', exportData);
 importInput.addEventListener('change', handleImport);
+if (autoFallbackSelect) {
+  autoFallbackSelect.addEventListener('change', handleAutoFallbackChange);
+}
+if (toggleBulkBtn) {
+  toggleBulkBtn.addEventListener('click', () => toggleBulkMode());
+}
+if (bulkModeSelect) {
+  bulkModeSelect.addEventListener('change', () => {
+    updateBulkModeVisibility();
+    updateBulkUI();
+  });
+}
+if (bulkApplyBtn) {
+  bulkApplyBtn.addEventListener('click', handleBulkApply);
+}
+if (bulkDeleteBtn) {
+  bulkDeleteBtn.addEventListener('click', handleBulkDelete);
+}
+if (bulkClearBtn) {
+  bulkClearBtn.addEventListener('click', clearBulkSelection);
+}
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
-  if (changes.proxyProfiles || changes.domainRules || changes.globalProfileId) {
+  if (changes.proxyProfiles || changes.domainRules || changes.globalProfileId || changes.autoModeFallback) {
     loadState();
   }
 });

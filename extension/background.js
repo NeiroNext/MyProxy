@@ -14,7 +14,8 @@ const DEFAULT_STATE = {
   proxyProfiles: [{ ...DEFAULT_PROFILE }],
   domainRules: [],
   errorDomains: [],
-  globalProfileId: DEFAULT_PROFILE_ID
+  globalProfileId: DEFAULT_PROFILE_ID,
+  autoModeFallback: 'direct'
 };
 
 let stateCache = null;
@@ -75,12 +76,14 @@ function normalizeState(raw = {}) {
   if (!globalProfileId || !proxyProfiles.some((profile) => profile.id === globalProfileId)) {
     globalProfileId = proxyProfiles[0].id;
   }
+  const autoModeFallback = raw.autoModeFallback === 'proxy' ? 'proxy' : 'direct';
   return {
     mode,
     proxyProfiles,
     domainRules,
     errorDomains,
-    globalProfileId
+    globalProfileId,
+    autoModeFallback
   };
 }
 
@@ -121,6 +124,10 @@ async function ensureDefaults() {
     const firstProfile = Array.isArray(profiles) && profiles.length ? profiles[0] : DEFAULT_PROFILE;
     updates.globalProfileId = firstProfile.id;
   }
+  const currentAutoFallback = updates.autoModeFallback || data.autoModeFallback;
+  if (currentAutoFallback !== 'proxy' && currentAutoFallback !== 'direct') {
+    updates.autoModeFallback = 'direct';
+  }
   if (Object.keys(updates).length) {
     await chrome.storage.local.set(updates);
   }
@@ -150,6 +157,22 @@ function buildProxyConfig(profile) {
 
 function sanitizeForPac(value) {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function getProxyInstruction(profile) {
+  if (!profile || !profile.host || !profile.port) {
+    return null;
+  }
+  const scheme = (profile.scheme || 'http').toLowerCase();
+  let proxyPrefix = 'PROXY';
+  if (scheme === 'https') {
+    proxyPrefix = 'HTTPS';
+  } else if (scheme === 'socks5') {
+    proxyPrefix = 'SOCKS5';
+  } else if (scheme === 'socks' || scheme === 'socks4') {
+    proxyPrefix = 'SOCKS';
+  }
+  return `${proxyPrefix} ${profile.host}:${profile.port}`;
 }
 
 function normalizeHostPattern(pattern) {
@@ -211,7 +234,7 @@ function matchesPreparedRule(rule, urlLower, hostLower) {
   return matchesDomain(rule.matchPattern, hostLower);
 }
 
-function buildPacScript(profiles, rules, globalProfileId) {
+function buildPacScript(profiles, rules, globalProfileId, autoModeFallback = 'direct') {
   const profileMap = new Map();
   for (const profile of profiles) {
     profileMap.set(profile.id, profile);
@@ -238,19 +261,10 @@ function buildPacScript(profiles, rules, globalProfileId) {
         continue;
       }
       const profile = profileMap.get(rule.profileId) || fallbackProfile;
-      if (!profile || !profile.host || !profile.port) {
+      const proxyLine = getProxyInstruction(profile);
+      if (!proxyLine) {
         continue;
       }
-      const scheme = (profile.scheme || 'http').toLowerCase();
-      let proxyPrefix = 'PROXY';
-      if (scheme === 'https') {
-        proxyPrefix = 'HTTPS';
-      } else if (scheme === 'socks5') {
-        proxyPrefix = 'SOCKS5';
-      } else if (scheme === 'socks' || scheme === 'socks4') {
-        proxyPrefix = 'SOCKS';
-      }
-      const proxyLine = `${proxyPrefix} ${profile.host}:${profile.port}`;
       lines.push(`  if (urlLower.indexOf("${pattern}") !== -1) { return "${proxyLine}"; }`);
       continue;
     }
@@ -261,30 +275,28 @@ function buildPacScript(profiles, rules, globalProfileId) {
     }
 
     const profile = profileMap.get(rule.profileId) || fallbackProfile;
-    if (!profile || !profile.host || !profile.port) {
+    const proxyLine = getProxyInstruction(profile);
+    if (!proxyLine) {
       continue;
     }
-    const scheme = (profile.scheme || 'http').toLowerCase();
-    let proxyPrefix = 'PROXY';
-    if (scheme === 'https') {
-      proxyPrefix = 'HTTPS';
-    } else if (scheme === 'socks5') {
-      proxyPrefix = 'SOCKS5';
-    } else if (scheme === 'socks' || scheme === 'socks4') {
-      proxyPrefix = 'SOCKS';
-    }
-    const proxyLine = `${proxyPrefix} ${profile.host}:${profile.port}`;
     lines.push(`  if (matchesDomain("${pattern}")) { return "${proxyLine}"; }`);
   }
 
-  lines.push('  return "DIRECT";');
+  let defaultInstruction = 'DIRECT';
+  if (autoModeFallback === 'proxy') {
+    const fallbackInstruction = getProxyInstruction(fallbackProfile);
+    if (fallbackInstruction) {
+      defaultInstruction = fallbackInstruction;
+    }
+  }
+  lines.push(`  return "${defaultInstruction}";`);
   lines.push('}');
   return lines.join('\n');
 }
 
 async function updateProxySettings(state = null) {
   const currentState = state ? normalizeState(state) : stateCache || (await loadStateCache());
-  const { mode, proxyProfiles, domainRules, globalProfileId } = currentState;
+  const { mode, proxyProfiles, domainRules, globalProfileId, autoModeFallback } = currentState;
   const profiles = proxyProfiles.length ? proxyProfiles : [cloneProfile(DEFAULT_PROFILE)];
   const activeProfile = profiles.find((profile) => profile.id === globalProfileId) || profiles[0];
 
@@ -292,7 +304,7 @@ async function updateProxySettings(state = null) {
     const config = buildProxyConfig(activeProfile);
     await chrome.proxy.settings.set({ value: config, scope: 'regular' });
   } else if (mode === 'auto') {
-    const pacScript = buildPacScript(profiles, domainRules, globalProfileId);
+    const pacScript = buildPacScript(profiles, domainRules, globalProfileId, autoModeFallback);
     await chrome.proxy.settings.set({
       value: {
         mode: 'pac_script',
@@ -389,7 +401,11 @@ chrome.runtime.onStartup.addListener(async () => {
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
   const requiresUpdate = Boolean(
-    changes.mode || changes.proxyProfiles || changes.domainRules || changes.globalProfileId
+    changes.mode ||
+    changes.proxyProfiles ||
+    changes.domainRules ||
+    changes.globalProfileId ||
+    changes.autoModeFallback
   );
   const maybeState = applyChangesToCache(changes);
   const triggerUpdate = (state) => {
@@ -533,25 +549,35 @@ async function handleResolveUrlRule(payload = {}) {
   const hostLower = hostname.toLowerCase();
   const urlLower = inputUrl ? inputUrl.toLowerCase() : '';
   const matchedRule = preparedRules.find((rule) => matchesPreparedRule(rule, urlLower, hostLower));
-  const explicitRule = state.domainRules.find(
-    (rule) => normalizeRulePatternValue(rule.pattern) === hostLower
-  );
-
-  let mode = matchedRule?.mode || 'direct';
-  let profileId = matchedRule?.mode === 'proxy' ? matchedRule.profileId : null;
-
-  if (explicitRule) {
-    mode = explicitRule.mode === 'proxy' ? 'proxy' : 'direct';
-    profileId = explicitRule.mode === 'proxy' ? explicitRule.profileId : null;
-  }
 
   const profiles = Array.isArray(state.proxyProfiles) ? state.proxyProfiles : [];
+  const fallbackProfile =
+    (state.globalProfileId && profiles.find((profile) => profile.id === state.globalProfileId)) ||
+    profiles[0] ||
+    null;
+
+  let mode = 'direct';
+  let profileId = null;
+
+  if (matchedRule) {
+    mode = matchedRule.mode;
+    profileId = matchedRule.mode === 'proxy' ? matchedRule.profileId : null;
+  } else if (state.mode === 'proxy') {
+    mode = 'proxy';
+    profileId = state.globalProfileId;
+  } else if (state.mode === 'auto' && state.autoModeFallback === 'proxy') {
+    mode = 'proxy';
+    profileId = state.globalProfileId;
+  }
+
   if (mode === 'proxy') {
-    if (!profiles.some((profile) => profile.id === profileId)) {
-      const fallback =
-        (state.globalProfileId && profiles.find((profile) => profile.id === state.globalProfileId)) ||
-        profiles[0];
-      profileId = fallback ? fallback.id : null;
+    const resolvedProfile =
+      (profileId && profiles.find((profile) => profile.id === profileId)) || fallbackProfile;
+    if (resolvedProfile && resolvedProfile.host && resolvedProfile.port) {
+      profileId = resolvedProfile.id;
+    } else {
+      mode = 'direct';
+      profileId = null;
     }
   }
 
@@ -560,7 +586,7 @@ async function handleResolveUrlRule(payload = {}) {
     hostname,
     mode,
     profileId,
-    explicit: Boolean(explicitRule)
+    explicit: Boolean(matchedRule)
   };
 }
 

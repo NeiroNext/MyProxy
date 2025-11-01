@@ -24,10 +24,43 @@
       <section class="card" id="domainsSection">
         <div class="card-header">
           <h2>Домены и адреса</h2>
-          <button id="addDomain" type="button" class="primary">Добавить запись</button>
+          <div class="header-actions">
+            <button id="toggleBulkSelection" type="button" class="secondary">Выбрать несколько</button>
+            <button id="addDomain" type="button" class="primary">Добавить запись</button>
+          </div>
         </div>
-        <div class="table">
+        <div class="auto-mode-control">
+          <label for="autoFallback">Тип автопроксирования</label>
+          <select id="autoFallback">
+            <option value="direct">Список через прокси, остальное без прокси</option>
+            <option value="proxy">Всё через прокси по умолчанию</option>
+          </select>
+          <p class="hint">Определяет поведение режима «Автопрокси» для сайтов без заданных правил.</p>
+        </div>
+        <div id="bulkActions" class="bulk-actions" hidden>
+          <div class="bulk-summary">
+            <span id="bulkSelectedCount">Выделено: 0</span>
+            <button id="bulkClear" type="button" class="ghost">Сбросить выбор</button>
+          </div>
+          <div class="bulk-controls">
+            <label>
+              Режим
+              <select id="bulkModeSelect">
+                <option value="proxy">Прокси</option>
+                <option value="direct">Без прокси</option>
+              </select>
+            </label>
+            <label id="bulkProfileWrapper">
+              Профиль
+              <select id="bulkProfileSelect"></select>
+            </label>
+            <button id="bulkApply" type="button" class="primary">Применить</button>
+            <button id="bulkDelete" type="button" class="danger">Удалить</button>
+          </div>
+        </div>
+        <div class="table" id="domainTable">
           <div class="table-head">
+            <span class="select-col">Выбор</span>
             <span>Домен или адрес</span>
             <span>Режим</span>
             <span>Профиль</span>
