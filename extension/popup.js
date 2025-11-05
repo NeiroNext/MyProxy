@@ -24,6 +24,7 @@ let currentSiteDetails = null;
 let isUpdatingSiteSelect = false;
 
 async function loadState() {
+  const activeTabInfoPromise = getActiveTabInfo();
   let response;
   try {
     response = await chrome.runtime.sendMessage({ type: 'getStateSnapshot' });
@@ -57,7 +58,8 @@ async function loadState() {
     globalProfileId = fallback.globalProfileId;
     autoModeFallback = fallback.autoModeFallback === 'proxy' ? 'proxy' : 'direct';
   }
-  currentErrors = errorDomains;
+  const activeTabInfo = await activeTabInfoPromise;
+  currentErrors = filterErrorsForActiveTab(errorDomains, activeTabInfo);
   currentProfiles = proxyProfiles;
   currentGlobalProfileId = globalProfileId;
   currentMode = mode;
@@ -71,7 +73,7 @@ async function loadState() {
   populateErrorProfiles(proxyProfiles, globalProfileId);
   toggleErrorProfileField();
   updateErrorsBadge();
-  await refreshCurrentSiteSelector();
+  await refreshCurrentSiteSelector(activeTabInfo);
 }
 
 function updateStatus(mode, profiles, globalProfileId, autoFallback) {
@@ -209,6 +211,18 @@ function toggleErrorProfileField() {
   }
 }
 
+async function getActiveTabInfo() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = tab?.url || '';
+    const hostname = extractHostname(url);
+    const tabId = typeof tab?.id === 'number' ? tab.id : undefined;
+    return { url, hostname, tabId };
+  } catch (error) {
+    return { url: '', hostname: '', tabId: undefined };
+  }
+}
+
 function extractHostname(url = '') {
   if (!url || typeof url !== 'string') {
     return '';
@@ -232,6 +246,24 @@ function extractHostname(url = '') {
   }
 }
 
+function filterErrorsForActiveTab(errors, activeInfo) {
+  if (!Array.isArray(errors) || !errors.length) {
+    return [];
+  }
+  const tabId = typeof activeInfo?.tabId === 'number' ? activeInfo.tabId : null;
+  const hostname = activeInfo?.hostname || '';
+  return errors.filter((item) => {
+    if (typeof tabId === 'number' && typeof item.tabId === 'number') {
+      return item.tabId === tabId;
+    }
+    if (hostname) {
+      const pattern = typeof item.pattern === 'string' ? item.pattern.toLowerCase() : '';
+      return pattern === hostname;
+    }
+    return false;
+  });
+}
+
 function buildCurrentSiteOptions() {
   const options = [
     { value: 'direct', label: 'Без прокси' }
@@ -247,18 +279,16 @@ function buildCurrentSiteOptions() {
   return options;
 }
 
-async function refreshCurrentSiteSelector() {
+async function refreshCurrentSiteSelector(activeInfo) {
   if (!currentSiteSection || !currentSiteSelect) {
     return;
   }
-  let tab;
-  try {
-    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  } catch (error) {
-    tab = null;
+  let info = activeInfo;
+  if (!info) {
+    info = await getActiveTabInfo();
   }
-  const url = tab?.url || '';
-  const hostname = extractHostname(url);
+  const url = info?.url || '';
+  const hostname = info?.hostname || '';
   if (!hostname) {
     currentSiteDetails = null;
     currentSiteSection.classList.add('hidden');
@@ -269,7 +299,7 @@ async function refreshCurrentSiteSelector() {
   }
 
   currentSiteSection.classList.remove('hidden');
-  currentSiteDetails = { hostname, url, tabId: tab?.id };
+  currentSiteDetails = { hostname, url, tabId: info?.tabId };
   if (currentSiteLabel) {
     currentSiteLabel.textContent = `Текущий сайт: ${hostname}`;
   }

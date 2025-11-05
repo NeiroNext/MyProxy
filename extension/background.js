@@ -53,12 +53,17 @@ function cloneRule(rule) {
 }
 
 function cloneError(entry) {
-  return {
+  const pattern = typeof entry.pattern === 'string' ? entry.pattern.toLowerCase() : '';
+  const cloned = {
     id: entry.id || crypto.randomUUID(),
-    pattern: entry.pattern || '',
+    pattern,
     lastError: entry.lastError || '',
     timestamp: entry.timestamp || Date.now()
   };
+  if (typeof entry.tabId === 'number') {
+    cloned.tabId = entry.tabId;
+  }
+  return cloned;
 }
 
 function normalizeState(raw = {}) {
@@ -356,7 +361,7 @@ function extractHostname(url = '') {
   }
 }
 
-async function addErrorDomain(url, error) {
+async function addErrorDomain(tabId, url, error) {
   try {
     const { errorDomains = [] } = await chrome.storage.local.get('errorDomains');
     let hostname = '';
@@ -365,8 +370,11 @@ async function addErrorDomain(url, error) {
     } catch (e) {
       hostname = url;
     }
+    if (hostname) {
+      hostname = hostname.toLowerCase();
+    }
     if (!hostname) return;
-    const exists = errorDomains.find((item) => item.pattern === hostname);
+    const exists = errorDomains.find((item) => (item.pattern || '').toLowerCase() === hostname);
     const now = Date.now();
     const entry = {
       id: exists ? exists.id : crypto.randomUUID(),
@@ -374,9 +382,15 @@ async function addErrorDomain(url, error) {
       lastError: error,
       timestamp: now
     };
+    const normalizedTabId = typeof tabId === 'number' && tabId >= 0 ? tabId : null;
+    if (normalizedTabId !== null) {
+      entry.tabId = normalizedTabId;
+    } else if (exists && typeof exists.tabId === 'number') {
+      entry.tabId = exists.tabId;
+    }
     let updated;
     if (exists) {
-      updated = errorDomains.map((item) => (item.pattern === hostname ? entry : item));
+      updated = errorDomains.map((item) => ((item.pattern || '').toLowerCase() === hostname ? entry : item));
     } else {
       updated = [...errorDomains, entry];
     }
@@ -423,7 +437,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 chrome.webRequest.onErrorOccurred.addListener(
   (details) => {
     if (details.tabId !== -1 && details.type === 'main_frame') {
-      addErrorDomain(details.url, details.error);
+      addErrorDomain(details.tabId, details.url, details.error);
     }
   },
   { urls: ['<all_urls>'] }
