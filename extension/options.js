@@ -99,35 +99,75 @@ function createDefaultProfile() {
 function createProfileCard(profile, index) {
   const card = document.createElement('div');
   card.className = 'profile-card';
+  if (state.globalProfileId === profile.id) {
+    card.classList.add('is-default');
+  }
 
   const header = document.createElement('div');
   header.className = 'profile-card-header';
 
+  const titleGroup = document.createElement('div');
+  titleGroup.className = 'profile-title';
+
+  const symbol = document.createElement('span');
+  symbol.className = 'profile-symbol';
+
   const title = document.createElement('h3');
-  title.textContent = profile.name || `Профиль ${index + 1}`;
-  header.appendChild(title);
+
+  const computeSymbol = () => {
+    const nameChar = profile.name?.trim()?.[0];
+    const hostChar = profile.host?.trim()?.[0];
+    const schemeChar = (profile.scheme || 'P')[0];
+    const fallback = nameChar || hostChar || schemeChar || 'P';
+    return fallback.toUpperCase();
+  };
+
+  const updateTitle = () => {
+    title.textContent = profile.name?.trim() || `Профиль ${index + 1}`;
+  };
+
+  const updateSymbol = () => {
+    symbol.textContent = computeSymbol();
+  };
+
+  updateTitle();
+  updateSymbol();
+
+  titleGroup.append(symbol, title);
+  header.appendChild(titleGroup);
 
   const actions = document.createElement('div');
   actions.className = 'profile-actions';
 
-  const defaultLabel = document.createElement('label');
-  defaultLabel.style.display = 'flex';
-  defaultLabel.style.alignItems = 'center';
-  defaultLabel.style.gap = '6px';
+  const defaultToggle = document.createElement('label');
+  defaultToggle.className = 'default-toggle';
   const defaultRadio = document.createElement('input');
   defaultRadio.type = 'radio';
   defaultRadio.name = 'defaultProfile';
-  defaultRadio.checked = state.globalProfileId === profile.id;
+  defaultToggle.appendChild(defaultRadio);
+  const defaultText = document.createElement('span');
+  defaultText.className = 'default-label';
+  defaultText.textContent = 'По умолчанию';
+  defaultToggle.appendChild(defaultText);
+  actions.appendChild(defaultToggle);
+
+  const applyDefaultStyles = () => {
+    const isDefault = state.globalProfileId === profile.id;
+    defaultRadio.checked = isDefault;
+    card.classList.toggle('is-default', isDefault);
+  };
+
+  applyDefaultStyles();
+
   defaultRadio.addEventListener('change', () => {
+    if (state.globalProfileId === profile.id) {
+      return;
+    }
     state.globalProfileId = profile.id;
     saveProfiles();
+    renderProfiles();
     showStatus(`Профиль «${profile.name || `Профиль ${index + 1}`}» выбран по умолчанию.`);
   });
-  defaultLabel.appendChild(defaultRadio);
-  const defaultText = document.createElement('span');
-  defaultText.textContent = 'По умолчанию';
-  defaultLabel.appendChild(defaultText);
-  actions.appendChild(defaultLabel);
 
   if (state.proxyProfiles.length > 1) {
     const deleteBtn = document.createElement('button');
@@ -141,12 +181,44 @@ function createProfileCard(profile, index) {
   header.appendChild(actions);
   card.appendChild(header);
 
+  const summary = document.createElement('div');
+  summary.className = 'profile-summary';
+  card.appendChild(summary);
+
+  const createChip = (text) => {
+    const chip = document.createElement('span');
+    chip.className = 'summary-chip';
+    chip.textContent = text;
+    return chip;
+  };
+
+  const refreshSummary = () => {
+    summary.innerHTML = '';
+    const chips = [];
+    const scheme = (profile.scheme || 'http').toUpperCase();
+    chips.push(scheme);
+    const host = profile.host?.trim() || '';
+    const port = profile.port?.toString().trim() || '';
+    if (host || port) {
+      chips.push(`${host || '—'}${port ? `:${port}` : ''}`);
+    } else {
+      chips.push('Адрес не указан');
+    }
+    if (profile.username?.trim()) {
+      chips.push(`Логин: ${profile.username.trim()}`);
+    }
+    chips.forEach((text) => summary.appendChild(createChip(text)));
+  };
+
+  refreshSummary();
+
   const grid = document.createElement('div');
   grid.className = 'profile-grid';
 
   const nameField = createLabeledInput('Название', profile.name, 'text', (value) => {
     profile.name = value;
-    title.textContent = value || `Профиль ${index + 1}`;
+    updateTitle();
+    updateSymbol();
     saveProfiles();
   });
   grid.appendChild(nameField);
@@ -165,6 +237,10 @@ function createProfileCard(profile, index) {
   });
   schemeSelect.addEventListener('change', (event) => {
     profile.scheme = event.target.value;
+    refreshSummary();
+    if (!profile.name?.trim() && !profile.host?.trim()) {
+      updateSymbol();
+    }
     saveProfiles();
   });
   schemeField.appendChild(schemeSelect);
@@ -172,18 +248,24 @@ function createProfileCard(profile, index) {
 
   const hostField = createLabeledInput('Хост', profile.host, 'text', (value) => {
     profile.host = value;
+    refreshSummary();
+    if (!profile.name?.trim()) {
+      updateSymbol();
+    }
     saveProfiles();
   });
   grid.appendChild(hostField);
 
   const portField = createLabeledInput('Порт', profile.port, 'number', (value) => {
     profile.port = value;
+    refreshSummary();
     saveProfiles();
   });
   grid.appendChild(portField);
 
   const userField = createLabeledInput('Логин', profile.username, 'text', (value) => {
     profile.username = value;
+    refreshSummary();
     saveProfiles();
   });
   grid.appendChild(userField);
@@ -450,6 +532,24 @@ function renderDomains() {
       });
       row.appendChild(profileSelect);
 
+      const actionsCell = document.createElement('div');
+      actionsCell.className = 'row-actions';
+
+      const duplicateBtn = document.createElement('button');
+      duplicateBtn.type = 'button';
+      duplicateBtn.className = 'icon-button';
+      duplicateBtn.innerHTML = '⧉';
+      duplicateBtn.title = 'Дублировать запись';
+      duplicateBtn.setAttribute('aria-label', 'Дублировать запись');
+      duplicateBtn.addEventListener('click', () => {
+        const copy = { ...rule, id: crypto.randomUUID() };
+        state.domainRules = [...state.domainRules, copy];
+        saveDomains();
+        renderDomains();
+        showStatus('Запись продублирована. Отредактируйте копию при необходимости.');
+      });
+      actionsCell.appendChild(duplicateBtn);
+
       const deleteBtn = document.createElement('button');
       deleteBtn.type = 'button';
       deleteBtn.className = 'danger';
@@ -459,7 +559,9 @@ function renderDomains() {
         saveDomains();
         renderDomains();
       });
-      row.appendChild(deleteBtn);
+      actionsCell.appendChild(deleteBtn);
+
+      row.appendChild(actionsCell);
 
       domainList.appendChild(row);
     });
