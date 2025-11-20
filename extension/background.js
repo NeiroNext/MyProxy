@@ -374,12 +374,13 @@ async function addErrorDomain(tabId, url, error) {
       hostname = hostname.toLowerCase();
     }
     if (!hostname) return;
+    const reason = typeof error === 'string' && error.trim() ? error.trim() : '';
     const exists = errorDomains.find((item) => (item.pattern || '').toLowerCase() === hostname);
     const now = Date.now();
     const entry = {
       id: exists ? exists.id : crypto.randomUUID(),
       pattern: hostname,
-      lastError: error,
+      lastError: reason,
       timestamp: now
     };
     const normalizedTabId = typeof tabId === 'number' && tabId >= 0 ? tabId : null;
@@ -398,6 +399,21 @@ async function addErrorDomain(tabId, url, error) {
   } catch (err) {
     console.warn('Не удалось сохранить домен с ошибкой', err);
   }
+}
+
+function formatHttpError(details) {
+  const code = typeof details?.statusCode === 'number' ? details.statusCode : null;
+  if (!code || code < 400) {
+    return '';
+  }
+  const line = typeof details.statusLine === 'string' ? details.statusLine.trim() : '';
+  if (line) {
+    const match = line.match(/\s\d+\s(.+)$/);
+    if (match && match[1]) {
+      return `HTTP ${code} – ${match[1]}`;
+    }
+  }
+  return `HTTP ${code}`;
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -439,6 +455,17 @@ chrome.webRequest.onErrorOccurred.addListener(
     if (details.tabId !== -1 && details.type === 'main_frame') {
       addErrorDomain(details.tabId, details.url, details.error);
     }
+  },
+  { urls: ['<all_urls>'] }
+);
+
+chrome.webRequest.onCompleted.addListener(
+  (details) => {
+    if (details.tabId === -1 || typeof details.statusCode !== 'number' || details.statusCode < 400) {
+      return;
+    }
+    const message = formatHttpError(details);
+    addErrorDomain(details.tabId, details.url, message);
   },
   { urls: ['<all_urls>'] }
 );
