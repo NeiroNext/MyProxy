@@ -4,6 +4,8 @@ const addDomainBtn = document.getElementById('addDomain');
 const domainList = document.getElementById('domainList');
 const domainTable = document.getElementById('domainTable');
 const autoFallbackSelect = document.getElementById('autoFallback');
+const sortFieldSelect = document.getElementById('sortField');
+const sortDirectionSelect = document.getElementById('sortDirection');
 const toggleBulkBtn = document.getElementById('toggleBulkSelection');
 const bulkActions = document.getElementById('bulkActions');
 const bulkModeSelect = document.getElementById('bulkModeSelect');
@@ -23,6 +25,10 @@ let state = {
   domainRules: [],
   globalProfileId: 'profile-1',
   autoModeFallback: 'direct'
+};
+let domainSort = {
+  field: 'domain',
+  direction: 'asc'
 };
 
 let isBulkMode = false;
@@ -72,7 +78,8 @@ function ensureValidState() {
       id: rule.id || crypto.randomUUID(),
       pattern: rule.pattern || '',
       mode: rule.mode === 'direct' ? 'direct' : 'proxy',
-      profileId: rule.profileId
+      profileId: rule.profileId,
+      createdAt: Number.isFinite(Number(rule.createdAt)) ? Number(rule.createdAt) : Date.now()
     };
     if (next.mode === 'proxy' && !state.proxyProfiles.find((profile) => profile.id === next.profileId)) {
       next.profileId = state.globalProfileId;
@@ -459,7 +466,7 @@ function renderDomains() {
 
   state.domainRules
     .slice()
-    .sort((a, b) => a.pattern.localeCompare(b.pattern))
+    .sort(sortDomainRules)
     .forEach((rule) => {
       const row = document.createElement('div');
       row.className = 'table-row';
@@ -542,7 +549,7 @@ function renderDomains() {
       duplicateBtn.title = 'Дублировать запись';
       duplicateBtn.setAttribute('aria-label', 'Дублировать запись');
       duplicateBtn.addEventListener('click', () => {
-        const copy = { ...rule, id: crypto.randomUUID() };
+        const copy = { ...rule, id: crypto.randomUUID(), createdAt: Date.now() };
         state.domainRules = [...state.domainRules, copy];
         saveDomains();
         renderDomains();
@@ -606,7 +613,8 @@ function addDomain() {
     id: crypto.randomUUID(),
     pattern: '',
     mode: 'proxy',
-    profileId: state.globalProfileId
+    profileId: state.globalProfileId,
+    createdAt: Date.now()
   };
   state.domainRules = [...state.domainRules, newRule];
   saveDomains();
@@ -625,6 +633,38 @@ async function saveProfiles() {
 async function saveDomains() {
   ensureValidState();
   await chrome.storage.local.set({ domainRules: state.domainRules });
+}
+
+function getProfileLabel(profileId) {
+  const profile = state.proxyProfiles.find((item) => item.id === profileId);
+  return (profile?.name || profile?.host || '').toLowerCase();
+}
+
+function sortDomainRules(a, b) {
+  const direction = domainSort.direction === 'desc' ? -1 : 1;
+  const modeWeight = (rule) => (rule.mode === 'proxy' ? 0 : 1);
+  let value = 0;
+
+  if (domainSort.field === 'profile') {
+    value = getProfileLabel(a.profileId).localeCompare(getProfileLabel(b.profileId), 'ru');
+  } else if (domainSort.field === 'mode') {
+    value = modeWeight(a) - modeWeight(b);
+  } else if (domainSort.field === 'time') {
+    value = (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0);
+  } else {
+    value = (a.pattern || '').localeCompare(b.pattern || '', 'ru');
+  }
+
+  if (value === 0) {
+    value = (a.pattern || '').localeCompare(b.pattern || '', 'ru');
+  }
+  return value * direction;
+}
+
+function handleSortChange() {
+  domainSort.field = sortFieldSelect?.value || 'domain';
+  domainSort.direction = sortDirectionSelect?.value === 'desc' ? 'desc' : 'asc';
+  renderDomains();
 }
 
 async function handleAutoFallbackChange(event) {
@@ -702,6 +742,12 @@ exportBtn.addEventListener('click', exportData);
 importInput.addEventListener('change', handleImport);
 if (autoFallbackSelect) {
   autoFallbackSelect.addEventListener('change', handleAutoFallbackChange);
+}
+if (sortFieldSelect) {
+  sortFieldSelect.addEventListener('change', handleSortChange);
+}
+if (sortDirectionSelect) {
+  sortDirectionSelect.addEventListener('change', handleSortChange);
 }
 if (toggleBulkBtn) {
   toggleBulkBtn.addEventListener('click', () => toggleBulkMode());

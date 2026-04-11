@@ -67,7 +67,7 @@ function cloneError(entry) {
 }
 
 function normalizeState(raw = {}) {
-  const mode = raw.mode === 'proxy' || raw.mode === 'auto' ? raw.mode : 'direct';
+  const mode = ['proxy', 'auto', 'auto_plus'].includes(raw.mode) ? raw.mode : 'direct';
   const proxyProfiles = Array.isArray(raw.proxyProfiles) && raw.proxyProfiles.length
     ? raw.proxyProfiles.map(cloneProfile)
     : [cloneProfile(DEFAULT_PROFILE)];
@@ -308,8 +308,9 @@ async function updateProxySettings(state = null) {
   if (mode === 'proxy') {
     const config = buildProxyConfig(activeProfile);
     await chrome.proxy.settings.set({ value: config, scope: 'regular' });
-  } else if (mode === 'auto') {
-    const pacScript = buildPacScript(profiles, domainRules, globalProfileId, autoModeFallback);
+  } else if (mode === 'auto' || mode === 'auto_plus') {
+    const effectiveFallback = mode === 'auto_plus' ? 'proxy' : autoModeFallback;
+    const pacScript = buildPacScript(profiles, domainRules, globalProfileId, effectiveFallback);
     await chrome.proxy.settings.set({
       value: {
         mode: 'pac_script',
@@ -562,7 +563,7 @@ async function handleApplyErrorDomains(payload) {
 
 async function handleSetMode(payload) {
   const { mode, profileId } = payload || {};
-  if (!['direct', 'proxy', 'auto'].includes(mode)) {
+  if (!['direct', 'proxy', 'auto', 'auto_plus'].includes(mode)) {
     return { success: false, message: 'Недопустимый режим' };
   }
   const nextState = await getStateSnapshot();
@@ -604,6 +605,9 @@ async function handleResolveUrlRule(payload = {}) {
     mode = matchedRule.mode;
     profileId = matchedRule.mode === 'proxy' ? matchedRule.profileId : null;
   } else if (state.mode === 'proxy') {
+    mode = 'proxy';
+    profileId = state.globalProfileId;
+  } else if (state.mode === 'auto_plus') {
     mode = 'proxy';
     profileId = state.globalProfileId;
   } else if (state.mode === 'auto' && state.autoModeFallback === 'proxy') {

@@ -329,6 +329,25 @@ button.ghost:hover {
   font-size: 0.95rem;
 }
 
+.sort-controls {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) auto minmax(180px, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.sort-controls label {
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.sort-controls select {
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+
 .table {
   display: flex;
   flex-direction: column;

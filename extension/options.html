@@ -37,6 +37,20 @@
           </select>
           <p class="hint">Определяет поведение режима «Автопрокси» для сайтов без заданных правил.</p>
         </div>
+        <div class="sort-controls">
+          <label for="sortField">Сортировать по</label>
+          <select id="sortField">
+            <option value="domain">домену/адресу</option>
+            <option value="profile">профилю прокси</option>
+            <option value="mode">режиму</option>
+            <option value="time">времени</option>
+          </select>
+          <label for="sortDirection">Порядок</label>
+          <select id="sortDirection">
+            <option value="asc">по возрастанию</option>
+            <option value="desc">по убыванию</option>
+          </select>
+        </div>
         <div id="bulkActions" class="bulk-actions" hidden>
           <div class="bulk-summary">
             <span id="bulkSelectedCount">Выделено: 0</span>

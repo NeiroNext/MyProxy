@@ -83,6 +83,10 @@ function updateStatus(mode, profiles, globalProfileId, autoFallback) {
   } else if (mode === 'proxy') {
     const profile = profiles?.find((item) => item.id === globalProfileId) || profiles?.[0];
     text = `Режим: все через прокси${profile?.name ? ` (${profile.name})` : ''}`;
+  } else if (mode === 'auto_plus') {
+    const profile = profiles?.find((item) => item.id === globalProfileId) || profiles?.[0];
+    const profileName = profile?.name || profile?.host || 'профиль по умолчанию';
+    text = `Режим: автопрокси + (по умолчанию через ${profileName})`;
   } else {
     const profile = profiles?.find((item) => item.id === globalProfileId) || profiles?.[0];
     if (autoFallback === 'proxy' && profile) {
