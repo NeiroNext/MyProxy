@@ -239,6 +239,18 @@ function matchesPreparedRule(rule, urlLower, hostLower) {
   return matchesDomain(rule.matchPattern, hostLower);
 }
 
+function findMatchedRule(preparedRules, urlLower, hostLower) {
+  const pathRule = preparedRules.find(
+    (rule) => rule.isPathPattern && matchesPreparedRule(rule, urlLower, hostLower)
+  );
+  if (pathRule) {
+    return pathRule;
+  }
+  return preparedRules.find(
+    (rule) => !rule.isPathPattern && matchesPreparedRule(rule, urlLower, hostLower)
+  );
+}
+
 function buildPacScript(profiles, rules, globalProfileId, autoModeFallback = 'direct') {
   const profileMap = new Map();
   for (const profile of profiles) {
@@ -258,7 +270,12 @@ function buildPacScript(profiles, rules, globalProfileId, autoModeFallback = 'di
   lines.push('    return hostLower.substr(hostLower.length - pattern.length - 1) === "." + pattern;');
   lines.push('  }');
 
-  for (const rule of preparedRules) {
+  const orderedRules = [
+    ...preparedRules.filter((rule) => rule.isPathPattern),
+    ...preparedRules.filter((rule) => !rule.isPathPattern)
+  ];
+
+  for (const rule of orderedRules) {
     const pattern = sanitizeForPac(rule.matchPattern);
     if (rule.isPathPattern) {
       if (rule.mode === 'direct') {
@@ -590,7 +607,7 @@ async function handleResolveUrlRule(payload = {}) {
   const preparedRules = prepareDomainRules(state.domainRules);
   const hostLower = hostname.toLowerCase();
   const urlLower = inputUrl ? inputUrl.toLowerCase() : '';
-  const matchedRule = preparedRules.find((rule) => matchesPreparedRule(rule, urlLower, hostLower));
+  const matchedRule = findMatchedRule(preparedRules, urlLower, hostLower);
 
   const profiles = Array.isArray(state.proxyProfiles) ? state.proxyProfiles : [];
   const fallbackProfile =
