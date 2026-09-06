@@ -58,6 +58,8 @@ function cloneError(entry) {
     id: entry.id || crypto.randomUUID(),
     pattern,
     lastError: entry.lastError || '',
+    resourceType: entry.resourceType || '',
+    count: Number.isFinite(Number(entry.count)) && Number(entry.count) > 0 ? Number(entry.count) : 1,
     timestamp: entry.timestamp || Date.now()
   };
   if (typeof entry.tabId === 'number') {
@@ -475,44 +477,82 @@ function extractHostname(url = '') {
   }
 }
 
-async function addErrorDomain(tabId, url, error) {
-  try {
-    const { errorDomains = [] } = await chrome.storage.local.get('errorDomains');
-    let hostname = '';
-    try {
-      hostname = new URL(url).hostname;
-    } catch (e) {
-      hostname = url;
-    }
-    if (hostname) {
-      hostname = hostname.toLowerCase();
-    }
-    if (!hostname) return;
-    const reason = typeof error === 'string' && error.trim() ? error.trim() : '';
-    const exists = errorDomains.find((item) => (item.pattern || '').toLowerCase() === hostname);
-    const now = Date.now();
-    const entry = {
-      id: exists ? exists.id : crypto.randomUUID(),
-      pattern: hostname,
-      lastError: reason,
-      timestamp: now
-    };
-    const normalizedTabId = typeof tabId === 'number' && tabId >= 0 ? tabId : null;
-    if (normalizedTabId !== null) {
-      entry.tabId = normalizedTabId;
-    } else if (exists && typeof exists.tabId === 'number') {
-      entry.tabId = exists.tabId;
-    }
-    let updated;
-    if (exists) {
-      updated = errorDomains.map((item) => ((item.pattern || '').toLowerCase() === hostname ? entry : item));
-    } else {
-      updated = [...errorDomains, entry];
-    }
-    await chrome.storage.local.set({ errorDomains: updated });
-  } catch (err) {
-    console.warn('Не удалось сохранить домен с ошибкой', err);
+const MAX_ERROR_ENTRIES = 300;
+
+// Записи идут по очереди: параллельные запросы иначе перетирали друг друга,
+// потому что каждый читал storage целиком и клал обратно свою версию.
+let errorWriteChain = Promise.resolve();
+
+function queueErrorWrite(task) {
+  errorWriteChain = errorWriteChain.then(task, task);
+  return errorWriteChain.catch((error) => console.warn('Не удалось обновить список ошибок', error));
+}
+
+function sameErrorEntry(item, hostname, tabId) {
+  if ((item.pattern || '').toLowerCase() !== hostname) {
+    return false;
   }
+  return tabId === null ? typeof item.tabId !== 'number' : item.tabId === tabId;
+}
+
+async function addErrorDomain(tabId, url, error, resourceType = '') {
+  const hostname = extractHostname(url);
+  if (!hostname) {
+    return;
+  }
+  const normalizedTabId = typeof tabId === 'number' && tabId >= 0 ? tabId : null;
+  const reason = typeof error === 'string' && error.trim() ? error.trim() : '';
+  await queueErrorWrite(async () => {
+    const { errorDomains = [] } = await chrome.storage.local.get('errorDomains');
+    const list = Array.isArray(errorDomains) ? [...errorDomains] : [];
+    const index = list.findIndex((item) => sameErrorEntry(item, hostname, normalizedTabId));
+    const now = Date.now();
+    if (index >= 0) {
+      const previous = list[index];
+      list[index] = {
+        ...previous,
+        lastError: reason || previous.lastError || '',
+        resourceType: resourceType || previous.resourceType || '',
+        count: (Number(previous.count) || 1) + 1,
+        timestamp: now
+      };
+    } else {
+      const entry = {
+        id: crypto.randomUUID(),
+        pattern: hostname,
+        lastError: reason,
+        resourceType: resourceType || '',
+        count: 1,
+        timestamp: now
+      };
+      if (normalizedTabId !== null) {
+        entry.tabId = normalizedTabId;
+      }
+      list.push(entry);
+    }
+    const trimmed =
+      list.length > MAX_ERROR_ENTRIES
+        ? list.sort((a, b) => b.timestamp - a.timestamp).slice(0, MAX_ERROR_ENTRIES)
+        : list;
+    await chrome.storage.local.set({ errorDomains: trimmed });
+  });
+}
+
+// Список должен показывать ошибки текущей загрузки, а не копиться вечно.
+async function clearTabErrors(tabId) {
+  if (typeof tabId !== 'number' || tabId < 0) {
+    return;
+  }
+  await queueErrorWrite(async () => {
+    const { errorDomains = [] } = await chrome.storage.local.get('errorDomains');
+    if (!Array.isArray(errorDomains) || !errorDomains.length) {
+      return;
+    }
+    const remaining = errorDomains.filter((item) => item.tabId !== tabId);
+    if (remaining.length !== errorDomains.length) {
+      await chrome.storage.local.set({ errorDomains: remaining });
+    }
+  });
 }
 
 function formatHttpError(details) {
@@ -564,11 +604,14 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
+// Раньше сетевые ошибки писались только для main_frame, поэтому упавшие
+// XHR/fetch/картинки были видны лишь в консоли разработчика.
 chrome.webRequest.onErrorOccurred.addListener(
   (details) => {
-    if (details.tabId !== -1 && details.type === 'main_frame') {
-      addErrorDomain(details.tabId, details.url, details.error);
+    if (details.tabId === -1) {
+      return;
     }
+    addErrorDomain(details.tabId, details.url, details.error, details.type);
   },
   { urls: ['<all_urls>'] }
 );
@@ -578,11 +621,20 @@ chrome.webRequest.onCompleted.addListener(
     if (details.tabId === -1 || typeof details.statusCode !== 'number' || details.statusCode < 400) {
       return;
     }
-    const message = formatHttpError(details);
-    addErrorDomain(details.tabId, details.url, message);
+    addErrorDomain(details.tabId, details.url, formatHttpError(details), details.type);
   },
   { urls: ['<all_urls>'] }
 );
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'loading') {
+    clearTabErrors(tabId);
+  }
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  clearTabErrors(tabId);
+});
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request?.type === 'getStateSnapshot') {
@@ -617,6 +669,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch((error) => {
         console.warn('Не удалось определить правило для адреса', error);
         sendResponse({ success: false, message: 'Ошибка определения правила' });
+      });
+    return true;
+  }
+  if (request?.type === 'resolveErrorDomains') {
+    handleResolveErrorDomains(request.payload)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        console.warn('Не удалось определить прокси для доменов', error);
+        sendResponse({ success: false, results: {} });
       });
     return true;
   }
@@ -746,6 +807,55 @@ async function handleResolveUrlRule(payload = {}) {
     profileId,
     explicit: Boolean(matchedRule)
   };
+}
+
+// Для списка проблемных доменов: что для каждого действует прямо сейчас.
+async function handleResolveErrorDomains(payload = {}) {
+  const patterns = Array.isArray(payload.patterns) ? payload.patterns : [];
+  const state = await getStateSnapshot();
+  const preparedRules = prepareDomainRules(state.domainRules);
+  const profiles = Array.isArray(state.proxyProfiles) ? state.proxyProfiles : [];
+  const profileMap = new Map(profiles.map((profile) => [profile.id, profile]));
+  const globalIsProxy =
+    state.mode === 'proxy' ||
+    state.mode === 'auto_plus' ||
+    (state.mode === 'auto' && state.autoModeFallback === 'proxy');
+
+  const results = {};
+  for (const raw of patterns) {
+    const hostLower = String(raw || '').trim().toLowerCase();
+    if (!hostLower || results[hostLower]) {
+      continue;
+    }
+    const matchedRule = findMatchedRule(preparedRules, `http://${hostLower}/`, hostLower);
+    let mode = 'direct';
+    let profileId = null;
+    if (matchedRule) {
+      mode = matchedRule.mode;
+      profileId = matchedRule.mode === 'proxy' ? matchedRule.profileId : null;
+    } else if (globalIsProxy) {
+      mode = 'proxy';
+      profileId = state.globalProfileId;
+    }
+
+    let profileName = '';
+    if (mode === 'proxy') {
+      const resolved =
+        (profileId && profileMap.get(profileId)) ||
+        profileMap.get(state.globalProfileId) ||
+        profiles[0];
+      if (isProfileUsable(resolved)) {
+        profileId = resolved.id;
+        profileName = profileLabel(resolved);
+      } else {
+        mode = 'direct';
+        profileId = null;
+      }
+    }
+
+    results[hostLower] = { mode, profileId, profileName, explicit: Boolean(matchedRule) };
+  }
+  return { success: true, results };
 }
 
 async function handleSetDomainRule(payload = {}) {

@@ -22,6 +22,7 @@ let currentGlobalProfileId = '';
 let currentMode = 'direct';
 let currentAutoFallback = 'direct';
 let currentSiteDetails = null;
+let errorResolutions = {};
 let isUpdatingSiteSelect = false;
 
 async function loadState() {
@@ -71,6 +72,7 @@ async function loadState() {
   if (activeRadio) {
     activeRadio.checked = true;
   }
+  errorResolutions = await resolveErrorDomains(currentErrors);
   renderErrors();
   updateStatus(mode, proxyProfiles, globalProfileId, currentAutoFallback);
   populateErrorProfiles(proxyProfiles, globalProfileId);
@@ -126,6 +128,36 @@ function updateStatus(mode, profiles, globalProfileId, autoFallback) {
   statusMessage.textContent = text;
 }
 
+async function resolveErrorDomains(errors) {
+  const patterns = Array.from(
+    new Set((errors || []).map((item) => formatErrorPattern(item.pattern)).filter(Boolean))
+  );
+  if (!patterns.length) {
+    return {};
+  }
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'resolveErrorDomains',
+      payload: { patterns }
+    });
+    return response?.success ? response.results || {} : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function describeCurrentRouting(hostname) {
+  const info = errorResolutions[hostname];
+  if (!info) {
+    return 'сейчас: не определено';
+  }
+  if (info.mode === 'proxy') {
+    const suffix = info.explicit ? '' : ' (общее правило)';
+    return `сейчас: через «${info.profileName}»${suffix}`;
+  }
+  return info.explicit ? 'сейчас: без прокси (своё правило)' : 'сейчас: без прокси';
+}
+
 function renderErrors() {
   errorList.innerHTML = '';
   errorStatus.textContent = '';
@@ -153,15 +185,34 @@ function renderErrors() {
       checkbox.value = item.id;
       label.appendChild(checkbox);
 
+      const hostname = formatErrorPattern(item.pattern);
+
       const text = document.createElement('span');
-      text.textContent = formatErrorPattern(item.pattern);
+      text.textContent = hostname;
       label.appendChild(text);
+
+      const repeats = Number(item.count) || 1;
+      if (repeats > 1) {
+        const counter = document.createElement('span');
+        counter.className = 'error-count';
+        counter.textContent = `×${repeats}`;
+        counter.title = `Повторов: ${repeats}`;
+        label.appendChild(counter);
+      }
 
       container.appendChild(label);
 
-      const hint = document.createElement('small');
-      hint.textContent = item.lastError || '';
-      container.appendChild(hint);
+      const details = [item.resourceType, item.lastError].filter(Boolean).join(' · ');
+      if (details) {
+        const hint = document.createElement('small');
+        hint.textContent = details;
+        container.appendChild(hint);
+      }
+
+      const routing = document.createElement('small');
+      routing.className = 'error-current';
+      routing.textContent = describeCurrentRouting(hostname);
+      container.appendChild(routing);
 
       errorList.appendChild(container);
     });
