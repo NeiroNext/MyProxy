@@ -143,8 +143,19 @@ function parsePort(port) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function isProfileUsable(profile) {
+  return Boolean(profile && String(profile.host || '').trim() && String(profile.port || '').trim());
+}
+
+function profileLabel(profile, fallbackText = 'без названия') {
+  if (!profile) {
+    return fallbackText;
+  }
+  return String(profile.name || '').trim() || String(profile.host || '').trim() || fallbackText;
+}
+
 function buildProxyConfig(profile) {
-  if (!profile || !profile.host || !profile.port) {
+  if (!isProfileUsable(profile)) {
     return { mode: 'direct' };
   }
   return {
@@ -165,7 +176,7 @@ function sanitizeForPac(value) {
 }
 
 function getProxyInstruction(profile) {
-  if (!profile || !profile.host || !profile.port) {
+  if (!isProfileUsable(profile)) {
     return null;
   }
   const scheme = (profile.scheme || 'http').toLowerCase();
@@ -358,17 +369,52 @@ function buildPacScript(profiles, rules, globalProfileId, autoModeFallback = 'di
   return lines.join('\n');
 }
 
+function collectConfigWarnings(mode, profiles, domainRules, activeProfile, effectiveFallback) {
+  const warnings = [];
+  if (mode === 'proxy' && !isProfileUsable(activeProfile)) {
+    warnings.push(
+      `Профиль «${profileLabel(activeProfile)}» не заполнен: не указан хост или порт. Весь трафик идёт напрямую.`
+    );
+  }
+  if ((mode === 'auto' || mode === 'auto_plus') && effectiveFallback === 'proxy' && !isProfileUsable(activeProfile)) {
+    warnings.push(
+      `Профиль по умолчанию «${profileLabel(activeProfile)}» не заполнен: не указан хост или порт. ` +
+        'Сайты вне списка идут напрямую, а не через прокси.'
+    );
+  }
+  if (mode === 'auto' || mode === 'auto_plus') {
+    const broken = new Set();
+    const profileMap = new Map(profiles.map((profile) => [profile.id, profile]));
+    for (const rule of domainRules) {
+      if (rule.mode !== 'proxy') {
+        continue;
+      }
+      const profile = profileMap.get(rule.profileId) || activeProfile;
+      if (!isProfileUsable(profile)) {
+        broken.add((rule.pattern || '').trim() || '(пустое правило)');
+      }
+    }
+    if (broken.size) {
+      const shown = Array.from(broken).slice(0, 3).join(', ');
+      const tail = broken.size > 3 ? ` и ещё ${broken.size - 3}` : '';
+      warnings.push(`Правила без рабочего профиля не применяются: ${shown}${tail}.`);
+    }
+  }
+  return warnings;
+}
+
 async function updateProxySettings(state = null) {
   const currentState = state ? normalizeState(state) : stateCache || (await loadStateCache());
   const { mode, proxyProfiles, domainRules, globalProfileId, autoModeFallback } = currentState;
   const profiles = proxyProfiles.length ? proxyProfiles : [cloneProfile(DEFAULT_PROFILE)];
   const activeProfile = profiles.find((profile) => profile.id === globalProfileId) || profiles[0];
+  let effectiveFallback = 'direct';
 
   if (mode === 'proxy') {
     const config = buildProxyConfig(activeProfile);
     await chrome.proxy.settings.set({ value: config, scope: 'regular' });
   } else if (mode === 'auto' || mode === 'auto_plus') {
-    const effectiveFallback = mode === 'auto_plus' ? 'proxy' : autoModeFallback;
+    effectiveFallback = mode === 'auto_plus' ? 'proxy' : autoModeFallback;
     const pacScript = buildPacScript(profiles, domainRules, globalProfileId, effectiveFallback);
     await chrome.proxy.settings.set({
       value: {
@@ -379,6 +425,14 @@ async function updateProxySettings(state = null) {
     });
   } else {
     await chrome.proxy.settings.set({ value: { mode: 'direct' }, scope: 'regular' });
+  }
+
+  const warnings = collectConfigWarnings(mode, profiles, domainRules, activeProfile, effectiveFallback);
+  const { configWarnings: previous = [] } = await chrome.storage.local.get('configWarnings');
+  const changed =
+    previous.length !== warnings.length || warnings.some((item, index) => item !== previous[index]);
+  if (changed) {
+    await chrome.storage.local.set({ configWarnings: warnings });
   }
 }
 

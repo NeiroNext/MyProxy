@@ -243,3 +243,26 @@ footer {
 footer small {
   color: #95a5a6;
 }
+
+.config-warnings {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #4a2c12;
+  border: 1px solid #a1620f;
+  color: #ffd9a8;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.config-warnings.hidden {
+  display: none;
+}
+
+.config-warnings p {
+  margin: 0;
+}
+
+.config-warnings p + p {
+  margin-top: 6px;
+}

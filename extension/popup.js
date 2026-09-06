@@ -14,6 +14,7 @@ const currentSiteSection = document.getElementById('currentSiteSection');
 const currentSiteLabel = document.getElementById('currentSiteLabel');
 const currentSiteSelect = document.getElementById('currentSiteSelect');
 const currentSiteStatus = document.getElementById('currentSiteStatus');
+const configWarningsBox = document.getElementById('configWarnings');
 
 let currentErrors = [];
 let currentProfiles = [];
@@ -58,6 +59,8 @@ async function loadState() {
     globalProfileId = fallback.globalProfileId;
     autoModeFallback = fallback.autoModeFallback === 'proxy' ? 'proxy' : 'direct';
   }
+  const { configWarnings = [] } = await chrome.storage.local.get('configWarnings');
+  renderConfigWarnings(configWarnings);
   const activeTabInfo = await activeTabInfoPromise;
   currentErrors = filterErrorsForActiveTab(errorDomains, activeTabInfo);
   currentProfiles = proxyProfiles;
@@ -76,25 +79,49 @@ async function loadState() {
   await refreshCurrentSiteSelector(activeTabInfo);
 }
 
+function isProfileUsable(profile) {
+  return Boolean(profile && String(profile.host || '').trim() && String(profile.port || '').trim());
+}
+
+function renderConfigWarnings(warnings) {
+  if (!configWarningsBox) {
+    return;
+  }
+  configWarningsBox.innerHTML = '';
+  const list = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+  if (!list.length) {
+    configWarningsBox.classList.add('hidden');
+    return;
+  }
+  list.forEach((text) => {
+    const line = document.createElement('p');
+    line.textContent = text;
+    configWarningsBox.appendChild(line);
+  });
+  configWarningsBox.classList.remove('hidden');
+}
+
 function updateStatus(mode, profiles, globalProfileId, autoFallback) {
   let text = '';
+  const profile = profiles?.find((item) => item.id === globalProfileId) || profiles?.[0];
+  const profileName = profile?.name?.trim() || profile?.host?.trim() || 'профиль по умолчанию';
+  const usable = isProfileUsable(profile);
   if (mode === 'direct') {
     text = 'Режим: без прокси';
   } else if (mode === 'proxy') {
-    const profile = profiles?.find((item) => item.id === globalProfileId) || profiles?.[0];
-    text = `Режим: все через прокси${profile?.name ? ` (${profile.name})` : ''}`;
+    text = usable
+      ? `Режим: все через прокси (${profileName})`
+      : `Режим: все через прокси — профиль «${profileName}» не заполнен, трафик идёт напрямую`;
   } else if (mode === 'auto_plus') {
-    const profile = profiles?.find((item) => item.id === globalProfileId) || profiles?.[0];
-    const profileName = profile?.name || profile?.host || 'профиль по умолчанию';
-    text = `Режим: автопрокси + (по умолчанию через ${profileName})`;
+    text = usable
+      ? `Режим: автопрокси + (по умолчанию через ${profileName})`
+      : `Режим: автопрокси + — профиль «${profileName}» не заполнен, всё идёт напрямую`;
+  } else if (autoFallback === 'proxy') {
+    text = usable
+      ? `Режим: автопрокси (по умолчанию через ${profileName})`
+      : `Режим: автопрокси — профиль «${profileName}» не заполнен, всё идёт напрямую`;
   } else {
-    const profile = profiles?.find((item) => item.id === globalProfileId) || profiles?.[0];
-    if (autoFallback === 'proxy' && profile) {
-      const profileName = profile.name || profile.host || 'Профиль';
-      text = `Режим: автопрокси (по умолчанию через ${profileName})`;
-    } else {
-      text = 'Режим: автопрокси (по умолчанию без прокси)';
-    }
+    text = 'Режим: автопрокси (по умолчанию без прокси)';
   }
   statusMessage.textContent = text;
 }
@@ -495,7 +522,8 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     changes.errorDomains ||
     changes.proxyProfiles ||
     changes.globalProfileId ||
-    changes.autoModeFallback
+    changes.autoModeFallback ||
+    changes.configWarnings
   ) {
     loadState();
   }
