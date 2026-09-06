@@ -194,6 +194,31 @@ function normalizeHostPattern(pattern) {
   return normalized;
 }
 
+function stripScheme(value) {
+  const schemeIndex = value.indexOf('://');
+  return schemeIndex === -1 ? value : value.slice(schemeIndex + 3);
+}
+
+function splitPathPattern(rawPattern) {
+  const withoutScheme = stripScheme(rawPattern);
+  const slashIndex = withoutScheme.indexOf('/');
+  if (slashIndex === -1) {
+    return { hostPattern: normalizeHostPattern(withoutScheme), pathPattern: '' };
+  }
+  const hostPart = withoutScheme.slice(0, slashIndex);
+  const pathPart = withoutScheme.slice(slashIndex);
+  return {
+    hostPattern: normalizeHostPattern(hostPart),
+    pathPattern: pathPart || '/'
+  };
+}
+
+function extractPathFromUrl(urlLower) {
+  const withoutScheme = stripScheme(urlLower);
+  const slashIndex = withoutScheme.indexOf('/');
+  return slashIndex === -1 ? '/' : withoutScheme.slice(slashIndex);
+}
+
 function computeRulePriority(rule) {
   const baseLength = rule.matchPattern.length;
   return baseLength + (rule.isPathPattern ? 1000 : 0);
@@ -206,10 +231,21 @@ function prepareDomainRules(rules) {
       if (!rawPattern) {
         return null;
       }
-      const isPathPattern = rawPattern.includes('/');
-      const matchPattern = isPathPattern ? rawPattern : normalizeHostPattern(rawPattern);
-      if (!matchPattern) {
-        return null;
+      const isPathPattern = stripScheme(rawPattern).includes('/');
+      let hostPattern = '';
+      let pathPattern = '';
+      let matchPattern;
+      if (isPathPattern) {
+        ({ hostPattern, pathPattern } = splitPathPattern(rawPattern));
+        if (!pathPattern) {
+          return null;
+        }
+        matchPattern = `${hostPattern}${pathPattern}`;
+      } else {
+        matchPattern = normalizeHostPattern(rawPattern);
+        if (!matchPattern) {
+          return null;
+        }
       }
       const normalizedRule = {
         id: rule.id,
@@ -217,6 +253,8 @@ function prepareDomainRules(rules) {
         profileId: rule.profileId,
         rawPattern,
         matchPattern,
+        hostPattern,
+        pathPattern,
         isPathPattern,
         index
       };
@@ -233,10 +271,13 @@ function prepareDomainRules(rules) {
 }
 
 function matchesPreparedRule(rule, urlLower, hostLower) {
-  if (rule.isPathPattern) {
-    return urlLower.includes(rule.matchPattern);
+  if (!rule.isPathPattern) {
+    return matchesDomain(rule.matchPattern, hostLower);
   }
-  return matchesDomain(rule.matchPattern, hostLower);
+  if (rule.hostPattern && !matchesDomain(rule.hostPattern, hostLower)) {
+    return false;
+  }
+  return extractPathFromUrl(urlLower).startsWith(rule.pathPattern);
 }
 
 function findMatchedRule(preparedRules, urlLower, hostLower) {
@@ -269,6 +310,12 @@ function buildPacScript(profiles, rules, globalProfileId, autoModeFallback = 'di
   lines.push('    if (hostLower.length <= pattern.length) { return false; }');
   lines.push('    return hostLower.substr(hostLower.length - pattern.length - 1) === "." + pattern;');
   lines.push('  }');
+  lines.push('  function pathOf(value) {');
+  lines.push('    var schemeIndex = value.indexOf("://");');
+  lines.push('    var rest = schemeIndex === -1 ? value : value.substring(schemeIndex + 3);');
+  lines.push('    var slashIndex = rest.indexOf("/");');
+  lines.push('    return slashIndex === -1 ? "/" : rest.substring(slashIndex);');
+  lines.push('  }');
 
   const orderedRules = [
     ...preparedRules.filter((rule) => rule.isPathPattern),
@@ -276,23 +323,18 @@ function buildPacScript(profiles, rules, globalProfileId, autoModeFallback = 'di
   ];
 
   for (const rule of orderedRules) {
-    const pattern = sanitizeForPac(rule.matchPattern);
+    let condition;
     if (rule.isPathPattern) {
-      if (rule.mode === 'direct') {
-        lines.push(`  if (urlLower.indexOf("${pattern}") !== -1) { return "DIRECT"; }`);
-        continue;
-      }
-      const profile = profileMap.get(rule.profileId) || fallbackProfile;
-      const proxyLine = getProxyInstruction(profile);
-      if (!proxyLine) {
-        continue;
-      }
-      lines.push(`  if (urlLower.indexOf("${pattern}") !== -1) { return "${proxyLine}"; }`);
-      continue;
+      const pathCheck = `pathOf(urlLower).indexOf("${sanitizeForPac(rule.pathPattern)}") === 0`;
+      condition = rule.hostPattern
+        ? `matchesDomain("${sanitizeForPac(rule.hostPattern)}") && ${pathCheck}`
+        : pathCheck;
+    } else {
+      condition = `matchesDomain("${sanitizeForPac(rule.matchPattern)}")`;
     }
 
     if (rule.mode === 'direct') {
-      lines.push(`  if (matchesDomain("${pattern}")) { return "DIRECT"; }`);
+      lines.push(`  if (${condition}) { return "DIRECT"; }`);
       continue;
     }
 
@@ -301,7 +343,7 @@ function buildPacScript(profiles, rules, globalProfileId, autoModeFallback = 'di
     if (!proxyLine) {
       continue;
     }
-    lines.push(`  if (matchesDomain("${pattern}")) { return "${proxyLine}"; }`);
+    lines.push(`  if (${condition}) { return "${proxyLine}"; }`);
   }
 
   let defaultInstruction = 'DIRECT';
