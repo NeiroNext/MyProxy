@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Smart Proxy Switcher</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="popup">
+      <header>
+        <h1>Smart Proxy</h1>
+      </header>
+      <div id="configWarnings" class="config-warnings hidden"></div>
+      <section class="mode-selector">
+        <label>
+          <input type="radio" name="mode" value="direct" />
+          Без прокси
+        </label>
+        <label>
+          <input type="radio" name="mode" value="proxy" />
+          Прокси для всех
+        </label>
+        <label>
+          <input type="radio" name="mode" value="auto" />
+          Автопрокси
+        </label>
+        <label>
+          <input type="radio" name="mode" value="auto_plus" />
+          Автопрокси +
+        </label>
+      </section>
+      <div class="actions">
+        <button id="errorsButton" type="button">
+          Ошибки
+          <span id="errorsBadge" class="badge hidden">0</span>
+        </button>
+        <button id="settingsButton" type="button">Настройки</button>
+      </div>
+      <section id="errorsPanel" class="errors-panel hidden">
+        <h2>Проблемные домены</h2>
+        <div id="errorList" class="error-list"></div>
+        <div class="error-actions">
+          <label for="errorAction">Действие:</label>
+          <select id="errorAction">
+            <option value="proxy">Прокси</option>
+            <option value="direct">Без прокси</option>
+          </select>
+        </div>
+        <div id="errorProfileContainer" class="error-profile hidden">
+          <label for="errorProfile">Профиль прокси:</label>
+          <select id="errorProfile"></select>
+        </div>
+        <button id="applyErrors" type="button" class="primary">Ок</button>
+        <p id="errorStatus" class="status"></p>
+      </section>
+      <section id="currentSiteSection" class="current-site hidden">
+        <label for="currentSiteSelect" id="currentSiteLabel">Текущий сайт</label>
+        <select id="currentSiteSelect"></select>
+        <p id="currentSiteStatus" class="status"></p>
+      </section>
+      <footer>
+        <small id="statusMessage"></small>
+      </footer>
+    </div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
